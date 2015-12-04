@@ -151,9 +151,9 @@
 
 (defn conf-reload-task-auto []
   (let [home (System/getProperty "kanar.home")
-        conf (str home "kanar.conf")
-        svcs (str home "services.conf")
-        usrs (str home "users.conf")
+        conf (to-path home "kanar.conf")
+        svcs (to-path home "services.conf")
+        usrs (to-path home "users.conf")
         fok (File. (str home "/logs/reload.ok"))
         fer (File. (str home "/logs/reload.error"))]
     (log/info "Starting automatic configuration reload task ...")
@@ -196,12 +196,14 @@
 (defn start-server []
   (stop-server)
   (reload)
-  (let [{:keys [http-port https-port https-keystore https-keypass reload nrepl-port]} (:conf @*app-state*)]
+  (let [{:keys [http-port https-enabled https-port https-keystore https-keypass reload nrepl-port]} (:conf @*app-state*)]
     (reset! stopf (run-jetty kanar-handler
-                             {:port http-port :join? false
-                              ; :ssl? true :ssl-port https-port
-                              ; :keystore https-keystore :key-password https-keypass
-                              }))
+                             (merge
+                               {:port http-port :join? false}
+                               (if https-enabled
+                                 {:ssl? true :ssl-port https-port
+                                  :keystore https-keystore :key-password https-keypass}
+                                 {}))))
     (reset! ticket-cleaner-f (kc/ticket-cleaner-task *app-state*))
     (when-not @repl-server
       (reset! repl-server (nrepl/start-server :bind "0.0.0.0" :port nrepl-port)))

@@ -1,7 +1,22 @@
 # kanar-core
 
 Kanar is a non-reference CAS protocol implementation. Kanar is implemented as a framework and 
-leiningen template rather than 
+leiningen template rather than final server code as it needs to be customized anyway and some 
+initial customization can be performed by template itself.
+
+## Building from source
+
+Kanar binaries are not (yet) available in clojars.org repository, so you need fetch to compile them manually:
+
+```
+cd /tmp
+git clone https://github.com/jitlogic/kanar.git
+cd kanar
+for D in kanar-core kanar-ldap kanar-spnego lein-template ; do cd $D ; lein jar ; lein install ; cd .. ; done
+```
+
+This step will be obsolete as soon as first versions of kanar will be posted on clojars.
+
 
 ## Creating and compiling SSO server from template
 
@@ -50,7 +65,7 @@ Additionally user can create `jvm.conf` script and place `JAVA_HOME` and `JAVA_O
 Create directory for server instance and copy appropriate files there:
 
 ```
-$ mkdir /opt/kanar /opt/karaf/logs
+$ mkdir /opt/kanar /opt/kanar/logs
 $ cp /tmp/myserver/target/myserver-0.1.0-SNAPSHOT-standalone.jar /opt/kanar/kanar.jar
 $ cp /tmp/myserver/conf/{kanar.sh,kanar.conf,services.conf,users.conf} /opt/kanar
 ```
@@ -67,6 +82,9 @@ Start server:
 $ cd /opt/kanar
 $ ./kanar.sh start
 ```
+
+Note that by default server listens on non-SSL port and TGC cookies require SSL. You need either to 
+start 
 
 ## Documentation
 
