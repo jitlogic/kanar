@@ -1,0 +1,23 @@
+<xsd:schema xmlns:samlp="urn:oasis:names:tc:SAML:1.0:protocol" 
+			xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+			xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+			targetNamespace="http://schemas.xmlsoap.org/soap/envelope/">
+	<xsd:import namespace="urn:oasis:names:tc:SAML:1.0:protocol" schemaLocation="SamlReq.xsd"/>			
+    <xsd:element name="Envelope" type="soap:Envelope" />
+  <xsd:complexType name="Envelope" >
+    <xsd:sequence>
+      <xsd:element ref="soap:Header" minOccurs="0" />
+      <xsd:element ref="soap:Body" minOccurs="1" />
+    </xsd:sequence>
+  </xsd:complexType>
+  <xsd:element name="Header" type="soap:Header" />
+  <xsd:complexType name="Header" >
+    <xsd:sequence/>
+  </xsd:complexType>  
+  <xsd:element name="Body" type="soap:Body" />
+  <xsd:complexType name="Body" >
+    <xsd:sequence>
+      <xsd:element ref="samlp:Request" minOccurs="1" maxOccurs="1"/>
+    </xsd:sequence>
+  </xsd:complexType>	
+</xsd:schema>

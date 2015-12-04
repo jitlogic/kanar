@@ -1,0 +1,19 @@
+<xsd:schema targetNamespace="urn:oasis:names:tc:SAML:1.0:protocol" xmlns:samlp="urn:oasis:names:tc:SAML:1.0:protocol" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+	<xsd:complexType name="RequestAbstractType" abstract="true">
+		<xsd:attribute name="RequestID" type="xsd:ID" use="required"/>
+		<xsd:attribute name="MajorVersion" type="xsd:integer" use="required"/>
+		<xsd:attribute name="MinorVersion" type="xsd:integer" use="required"/>
+		<xsd:attribute name="IssueInstant" type="xsd:dateTime" use="required"/>
+	</xsd:complexType>
+	<xsd:element name="Request" type="samlp:RequestType"/>
+	<xsd:complexType name="RequestType">
+		<xsd:complexContent>
+			<xsd:extension base="samlp:RequestAbstractType">
+			<xsd:sequence>
+				<xsd:element ref="samlp:AssertionArtifact" maxOccurs="unbounded"/>
+			</xsd:sequence>
+			</xsd:extension>
+		</xsd:complexContent>
+	</xsd:complexType>
+	<xsd:element name="AssertionArtifact" type="xsd:string"/>
+</xsd:schema>

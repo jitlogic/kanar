@@ -1,0 +1,98 @@
+html, body {
+    width: 100%;
+    height: 100%;
+    position: relative;
+    overflow: hidden;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+    cursor: default;
+}
+
+form {
+    position: relative;
+    overflow: hidden;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+    cursor: default;
+}
+
+.container {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+.login-box {
+    position: relative;
+    border: 1px solid #ccc;
+    border-radius: 16px;
+    margin-top: 250px;
+    padding: 32px;
+    width: 512px;
+    align-self: center;
+    font-family: Tahoma, Arial, Verdana, sans-serif;
+    color: #777;
+}
+
+.login-int {
+    margin: auto;
+}
+
+.login-box h1 {
+    color: #555;
+    text-align: center;
+    margin-left: auto;
+    margin-right: auto;
+    margin-top: 0;
+}
+
+.login-box input {
+    border: 1px solid #999;
+    border-radius: 2px;
+}
+
+.login-box input[type="submit"] {
+    background: white;
+    margin-top: 32px;
+    margin-bottom: 24px;
+    padding: 4px 64px 4px 64px;
+    border: 1px solid #999;
+    border-radius: 4px;
+}
+
+.container input[type="submit"]:hover {
+    background: #eee;
+    cursor: hand;
+}
+
+.browser-comment {
+    font-size: 12px;
+    margin-top: 32px;
+    padding-top: 32px;
+    align-self: center;
+    color: #999;
+}
+
+.browser-comment > div {
+    text-align: center;
+}
+.browser-comment a {
+    text-decoration: none;
+    color: #555;
+    font-weight: bold;
+}
+.browser-comment a:hover {
+    background: #eee;
+    cursor: pointer;
+}
+
+.line {
+    margin: auto;
+    text-align: center;
+}

@@ -1,0 +1,8 @@
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns="urn:oasis:names:tc:SAML:1.0:protocol">
+    <soap:Header/>
+    <soap:Body>
+        <Request MinorVersion="1" RequestID="_7effc0a2d8b9d401e00affae63a43ac3" IssueInstant="2015-10-01T15:33:31.220Z">
+            <AssertionArtifact>ST-816-4zNKDC8AOobwGAVOdXwQJBxlstZXb8yI0x0Wfl30jSZFcBap202jBxv1iAvfkIze-SVR1</AssertionArtifact>
+        </Request>
+    </soap:Body>
+</soap:Envelope>
