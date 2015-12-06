@@ -7,7 +7,8 @@
   [[org.clojure/clojure "1.6.0"]
    [org.clojure/tools.nrepl "0.2.10"]
    [kanar/kanar-core "0.1.1"]
-   [kanar/kanar-ldap "0.1.1"]
+   {{#with-ldap}} [kanar/kanar-ldap "0.1.1"] {{/with-ldap}}
+   {{#with-hazelcast}} [kanar/kanar-hazelcast "0.1.1"] {{/with-hazelcast}}
    [ring/ring-core "1.3.2"]
    [ring/ring-devel "1.3.2"]
    [compojure "1.3.3"]

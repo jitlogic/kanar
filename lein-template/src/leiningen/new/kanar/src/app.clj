@@ -10,9 +10,10 @@
     [kanar.core.ticket :as kt]
     [kanar.core.util :as ku]
     [kanar.core.fileauth :as kf] {{#with-ldap}}
-    [kanar.ldap :as kl] {{/with-ldap}}
-    [org.httpkit.server :refer [run-server]]
     [clj-ldap.client :as ldap]
+    [kanar.ldap :as kl] {{/with-ldap}} {{#with-hazelcast}}
+    [kanar.hazelcast :as kh] {{/with-hazelcast}}
+    [org.httpkit.server :refer [run-server]]
     [ring.adapter.jetty :refer [run-jetty]]
     [{{name}}.views :as kav]
     [ring.middleware.reload :refer [wrap-reload]]
@@ -115,16 +116,19 @@
                   (kl/ldap-auth-fn ldap-conn (:ldap-conf conf) [])
                   (kl/ldap-attr-fn ldap-conn ATTR-MAP)){{/with-ldap}}
         {{#with-file}}auth-db (atom users)
-         auth-fn (kf/file-auth-fn auth-db){{/with-file}}]
+         auth-fn (kf/file-auth-fn auth-db){{/with-file}}
+        {{#with-hazelcast}} hci (or (:hazelcast old-app-state) (kh/new-hazelcast (:hazelcast conf))) {{/with-hazelcast}}]
     {:ticket-seq          (or (:ticket-seq old-app-state) (atom 0))
      :conf                conf
-     :services            services
-     :ticket-registry     (or (:ticket-registry old-app-state) (kt/atom-ticket-registry (atom {}) (:server-id conf)))
+     :services            services {{#with-hazelcast}}
+     :hazelcast           hci {{/with-hazelcast}}
+     :ticket-registry     (or (:ticket-registry old-app-state)
+          {{#with-atom-tr}}(kt/atom-ticket-registry (atom {}) (:server-id conf)) {{/with-atom-tr}}
+          {{#with-hazelcast}} (kt/map-ticket-registry (.getReplicatedMap hci "kanar.tickets") (:server-id conf)) {{/with-hazelcast}})
      :render-message-view kav/message-view
      :form-login-flow     (kc/form-login-flow auth-fn kav/login-view){{#with-file}}
      :auth-db             auth-db{{/with-file}}
      :audit-fn            ({{name}}-audit-fn (to-path home-dir (-> conf :log-conf :audit :path)))}))
-
 
 
 ; Start and stop functions

@@ -12,7 +12,7 @@ Kanar binaries are not (yet) available in clojars.org repository, so you need fe
 cd /tmp
 git clone https://github.com/jitlogic/kanar.git
 cd kanar
-for D in kanar-core kanar-ldap kanar-spnego lein-template ; do cd $D ; lein jar ; lein install ; cd .. ; done
+for D in kanar-core kanar-ldap kanar-hazelcast lein-template ; do cd $D ; lein jar ; lein install ; cd .. ; done
 ```
 
 This step will be obsolete as soon as first versions of kanar will be posted on clojars.
@@ -34,6 +34,8 @@ In order to use LDAP to authenticate, use `--with-ldapauth` option:
 ```
 $ lein new kanar myserver -- --with-ldapauth
 ```
+
+In order to use Hazelcast to have distributed ticket registry use `--with-hazelcast` option.
 
 Created project can (and should) be modified and adjusted to individual needs, yet it can be compiled and
 installed from get go:
@@ -83,8 +85,8 @@ $ cd /opt/kanar
 $ ./kanar.sh start
 ```
 
-Note that by default server listens on non-SSL port and TGC cookies require SSL. You need either to 
-start 
+Note that by default server listens on non-SSL port and TGC cookies require TLS. You need either to 
+use TLS-terminating proxy or enable HTTPS in `kanar.conf`.
 
 ## Documentation
 

@@ -18,9 +18,12 @@
 (defn parse-opts [opts]
   (let [optss (set opts)
         with-ldap (contains? optss "--with-ldapauth")
-        with-file (contains? optss "--with-fileauth")]
+        with-file (contains? optss "--with-fileauth")
+        with-hazelcast (contains? optss "--with-hazelcast")]
        {:with-file (or with-file (not with-ldap))
-        :with-ldap with-ldap}))
+        :with-ldap with-ldap
+        :with-hazelcast with-hazelcast
+        :with-atom-tr (not with-hazelcast)}))
 
 
 (defn kanar

@@ -1,5 +1,6 @@
 (ns kanar.core.ticket
-  (:require [kanar.core.util :as ku]))
+  (:require [kanar.core.util :as ku])
+  (:import (java.util Map)))
 
 
 (defprotocol ticket-registry
@@ -42,6 +43,43 @@
             (if (and (= type (:type t)) (< (:atime t) tstart) (not (:used t)))
               (del-ticket this t)))))
       )))
+
+
+(defn map-ticket-registry [^Map tm sid]
+  (let [seq-num (atom 0)]
+    (reify
+      ticket-registry
+
+      (get-ticket [_ tid]
+        (when tid (.get tm tid)))
+
+      (put-ticket [_ {tid :tid :as ticket}]
+        (when tid
+          (.put tm tid ticket)
+          ticket))
+
+      (del-ticket [_ {tid :tid :as ticket}]
+        (let [t (or tid ticket)]
+          (when t
+            (.remove tm t))))
+
+      (new-tid [_ prefix]
+        (gen-tid seq-num prefix 64 sid))
+
+      (session-tickets [_ {tid :tid}]
+        (when tid
+          (for [e (.entrySet tm)
+                :let [v (.getValue e)]
+                :when (= tid (:tid (:tgt v)))] v)))
+
+      (clean-tickets [this type timeout]
+        (let [tstart (- (ku/cur-time) timeout)]
+          (doseq [t (doall
+                      (for [e (.entrySet tm)
+                            :let [v (.getValue e)]
+                            :when (and (= type (:type v)) (< (:atime v) tstart) (not (:used v)))]
+                        v))]
+            (del-ticket this t)))))))
 
 
 (defn grant-tgt-ticket
