@@ -11,4 +11,5 @@
    [compojure "1.3.3"]
    [com.taoensso/timbre "4.0.2"]
    [com.cemerick/valip "0.3.2"]
-   [clj-http "2.0.0"]])
+   [clj-http "2.0.0"]
+   [org.clojure/test.check "0.9.0"]])

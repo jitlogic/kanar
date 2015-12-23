@@ -117,7 +117,7 @@
         (let [tgt (kt/get-ticket ticket-registry CASTGC)]
           (if tgt
             (audit app-state req tgt nil :TGT-DESTROYED)
-            (kt/del-ticket ticket-registry CASTGC)))        ; TODO co z pozostałymi ticketami ?
+            (kt/clear-session ticket-registry CASTGC)))
         (try+
           (let [princ (auth-flow-fn app-state req)
                 tgt (kt/grant-tgt-ticket ticket-registry princ)]
@@ -178,8 +178,9 @@
    {{service :service} :params, {{CASTGC :value} "CASTGC"} :cookies :as req}]
   (let [tgt (kt/get-ticket ticket-registry CASTGC)]
     (when tgt
-      (doseq [{{asu :app-urls} :service, url :url, :as svt} (kt/session-tickets ticket-registry tgt)]
-        (if (empty? asu)                                    ; TODO to powinno być asynchroniczne
+      (doseq [{{asu :app-urls} :service, url :url, :as svt} (kt/session-tickets ticket-registry tgt)
+              :when (.startsWith (:tid svt) "ST")]
+        (if (empty? asu)                                    ; TODO co z pozostałymi typami ticketów ?
           (service-logout url svt)
           (doseq [url asu] (service-logout url svt))))
       (kt/clear-session ticket-registry CASTGC)
@@ -199,11 +200,18 @@
   (let [svt (kt/get-ticket ticket-registry sid)
         valid (and svc-url sid svt (re-matches #"ST-.*" sid) (not (:used svt)) (= svc-url (:url svt)))] ; TODO obsłużenie opcji 'renew'
     (if svt
-      (kt/put-ticket ticket-registry (into svt {:used true})))
+      (kt/expend-ticket ticket-registry svt))
     (audit app-state req nil nil (if valid :SERVICE-TICKET-VALIDATED :SERVICE-TICKET-NOT-VALIDATED))
     (log/trace "KCORE-D001: validating ticket" svt "-->" valid)
     (if valid
       (str "yes\n" (:id (:princ (:tgt svt))) "\n") "no\n")))
+
+; TODO odsyłanie IOU przeniesc do innego modułu
+; TODO wyprowadzić send-pgt-iou do głównego modułu
+(defn send-pgt-iou [pgt-url tid iou]
+  ; TODO configure IOU
+  true)
+
 
 (defn cas20-validate-handler
   [{ticket-registry :ticket-registry :as app-state}
@@ -211,7 +219,7 @@
    re-tid]
   (let [svt (kt/get-ticket ticket-registry sid)]
     (if svt
-      (kt/put-ticket ticket-registry (into svt {:used true})))
+      (kt/expend-ticket ticket-registry svt))
     (cond
       (empty? svc-url)
         (do
@@ -304,7 +312,7 @@
         sid (or SAMLart (kp/saml-parse-lookup-tid saml))
         svt (kt/get-ticket ticket-registry sid)]
     (if svt
-      (kt/put-ticket ticket-registry (into svt {:used true})))
+      (kt/expend-ticket ticket-registry svt))
     (when-not (= svc-url (:url svt))
       (log/warn "KCORE-W012: Service and validation URL do not match: svc-url=" svc-url "but should be " (:url svt)))
     (if (and svc-url sid svt (not (:used svt)) (re-matches #"ST-.*" sid) ; TODO (= svc-url (:url svt))
@@ -318,21 +326,5 @@
         (log/warn "KCORE-W013: Service ticket NOT validated: svc-url=" svc-url "sid=" sid "svt=" svt " SAML=" saml)
         (audit app-state req nil nil :SERVICE-TICKET-NOT-VALIDATED)
         "Error executing SAML validation.\n"))))
-
-
-(defn ticket-cleaner-task [app-state & {:keys [interval] :or {:interval 60000}}]
-  (future
-    (loop []
-      (Thread/sleep interval)
-      (try
-        (let [ticket-registry (:ticket-registry @app-state)]
-          (log/debug "KCORE-D002: Cleaning up timed out tickets ...")
-          (kt/clean-tickets ticket-registry :svt 300000)
-          (kt/clean-tickets ticket-registry :pt 300000)
-          (kt/clean-tickets ticket-registry :pgt 36000000)
-          (kt/clean-tickets ticket-registry :tgt 36000000))  ; TODO wylogowywanie sesji z przeterminowanych ticketów TGT (?? czy na pewno ??)
-        (catch Throwable e
-          (log/error "KCODE-E002: Error while cleaning up ticket registry:" e)))
-      (recur))))
 
 

@@ -124,7 +124,7 @@
      :hazelcast           hci {{/with-hazelcast}}
      :ticket-registry     (or (:ticket-registry old-app-state)
           {{#with-atom-tr}}(kt/atom-ticket-registry (atom {}) (:server-id conf)) {{/with-atom-tr}}
-          {{#with-hazelcast}} (kt/map-ticket-registry (.getReplicatedMap hci "kanar.tickets") (:server-id conf)) {{/with-hazelcast}})
+          {{#with-hazelcast}} (kh/hazelcast-ticket-registry (.getReplicatedMap hci "kanar.tickets")) {{/with-hazelcast}})
      :render-message-view kav/message-view
      :form-login-flow     (kc/form-login-flow auth-fn kav/login-view){{#with-file}}
      :auth-db             auth-db{{/with-file}}

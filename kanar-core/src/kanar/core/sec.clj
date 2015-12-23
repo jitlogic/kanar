@@ -114,7 +114,7 @@
         (vfn req msg))))
 
 
-(defn wrap-http-validations [f vvdefs vfns]
+(defn with-http-validations [f vvdefs vfns]
   (fn [req]
     (let [vfn (vfns (:uri req) (:default vfns))]
       (try+
@@ -240,30 +240,4 @@
                       :SAMLart {:re ST_TICKET_RE :msg "Invalid ticket" :optional true}}}
    :body    {:vfn (new-saml-vfn) :optional true}
    :headers xff-headers-vd})
-
-
-(def cas-standard-vdefs
-  {"/login" cas-login-vd
-   "/logout" cas-logout-vd
-   "/validate" cas10-ticket-vd
-   "/serviceValidate" cas20-ticket-vd
-   "/proxyValudate" cas20-proxy-validate-vd
-   "/proxy" cas20-proxy-vd
-   "/samlValidate" saml-validate-vd
-   :default {:get {}, :head {}}})
-
-
-(def cas-standard-vfns
-  {:default {:status 200, :body "Invalid request."}})
-
-
-(defn wrap-check-referer [f re]
-  "Zabezpieczenie przed niektórymi klasami XSS poprzez wymuszenie właściwego nagłówka Referer."
-  (fn [{headers :headers method :request-method :as req}]
-    (let [referer (get headers "Referer")]
-      (if (and (= method :post) referer (not (re-matches re referer)))
-        (do
-          (log/warn "Invalid referer:" referer)
-          {:status 200, :body "Security alert: invalid referer."})
-        (f req)))))
 

@@ -2,136 +2,140 @@
   (:require [kanar.core.util :as ku])
   (:import (java.util Map)))
 
+(def ^:dynamic TGT-TIMEOUT (* 24 60 60 1000))
+(def ^:dynamic ST-FRESH-TIMEOUT (* 2 60 1000))
+(def ^:dynamic ST-USED-TIMEOUT (* 4 60 60 1000))
+
+(def ^:dynamic TID-SUFFIX "XXX")
+
+(defonce TID-SEQ (atom 0))
 
 (defprotocol ticket-registry
-  (get-ticket [tr tid])
-  (put-ticket [tr ticket])
-  (del-ticket [tr ticket])
-  (new-tid [tr prefix])
-  (session-tickets [tr tgt])
-  (clean-tickets [tr type timeout]))                            ; TODO clean-tickets -> old-tickets (listowanie)
+  "Protocol for ticket registry implementations. "
+  (get-ticket [tr tid]
+    "Returns ticket with given tid or nil if ticket was not found.")
+  (put-ticket [tr ticket timeout]
+    "Adds ticket to registry. Ticket will be removed after [timeout]
+     milliseconds if not updated. Also returns added ticket.")
+  (del-ticket [tr ticket]
+    "Removes ticket from registry. Note that ticket might be either
+     full ticket record of just string representing ticket ID."))
 
 
-(defn gen-tid [seq-num prefix len suffix]
+(defn new-tid [prefix]
   "Generates new ticket ID."
-  (str prefix "-" (swap! seq-num inc) "-" (ku/random-string len) "-" suffix))
+  (str prefix "-" (swap! TID-SEQ inc) "-" (ku/random-string 64) "-" TID-SUFFIX))
 
 
-(defn atom-ticket-registry [reg-atom sid]
-  (let [seq-num (atom 0)]
-    (reify
-      ticket-registry
+(defn atom-ticket-registry [reg-atom]
+  "Memory-only ticket registry implementation using an atom containing Clojure map."
+  (reify
+    ticket-registry
 
-      (get-ticket [_ tid]
-        (get @reg-atom tid))
+    (get-ticket [_ tid]
+      (get @reg-atom tid))
 
-      (put-ticket [_ ticket]
-        (swap! reg-atom #(assoc % (:tid ticket) ticket)) ticket)
+    (put-ticket [_ ticket timeout]
+      (let [ticket (assoc ticket :timeout (+ (ku/cur-time) timeout))]
+        (swap! reg-atom #(assoc % (:tid ticket) ticket))) ticket)
 
-      (del-ticket [_ ticket]
-        (swap! reg-atom #(dissoc % (or (:tid ticket) ticket))))
+    (del-ticket [_ ticket]
+      (swap! reg-atom #(dissoc % (or (:tid ticket) ticket))))
 
-      (new-tid [_ prefix]
-        (gen-tid seq-num prefix 64 sid))
-
-      (session-tickets [_ {tid :tid}]
-        (for [[_ v] @reg-atom :when (= tid (:tid (:tgt v)))] v))
-
-      (clean-tickets [this type timeout]
-        (let [tstart (- (ku/cur-time) timeout)]
-          (doseq [[_ t] @reg-atom]
-            (if (and (= type (:type t)) (< (:atime t) tstart) (not (:used t)))
-              (del-ticket this t)))))
-      )))
+    ))
 
 
-(defn map-ticket-registry [^Map tm sid]
-  (let [seq-num (atom 0)]
-    (reify
-      ticket-registry
+(defn map-ticket-registry [^Map tm]
+  "Memory-only ticket registry implementation using Java map."
+  (reify
+    ticket-registry
 
-      (get-ticket [_ tid]
-        (when tid (.get tm tid)))
+    (get-ticket [_ tid]
+      (locking tm
+        (when tid (.get tm tid))))
 
-      (put-ticket [_ {tid :tid :as ticket}]
-        (when tid
-          (.put tm tid ticket)
-          ticket))
+    (put-ticket [_ {tid :tid :as ticket} timeout]
+      (when tid
+        (locking tm
+          (.put tm tid (assoc ticket :timeout (+ (ku/cur-time) timeout))))
+        ticket))
 
-      (del-ticket [_ {tid :tid :as ticket}]
-        (let [t (or tid ticket)]
-          (when t
-            (.remove tm t))))
+    (del-ticket [_ {tid :tid :as ticket}]
+      (let [t (or tid ticket)]
+        (when t
+          (locking tm
+            (.remove tm t)))))
 
-      (new-tid [_ prefix]
-        (gen-tid seq-num prefix 64 sid))
-
-      (session-tickets [_ {tid :tid}]
-        (when tid
-          (for [e (.entrySet tm)
-                :let [v (.getValue e)]
-                :when (= tid (:tid (:tgt v)))] v)))
-
-      (clean-tickets [this type timeout]
-        (let [tstart (- (ku/cur-time) timeout)]
-          (doseq [t (doall
-                      (for [e (.entrySet tm)
-                            :let [v (.getValue e)]
-                            :when (and (= type (:type v)) (< (:atime v) tstart) (not (:used v)))]
-                        v))]
-            (del-ticket this t)))))))
+    ))
 
 
-(defn grant-tgt-ticket
-  [ticket-registry
-   princ]
-  (let [tid (new-tid ticket-registry "TGC")
-        tgt {:type :tgt, :tid tid, :atime (ku/cur-time), :princ princ}]
-    (put-ticket ticket-registry tgt)))
+(defn grant-tgt-ticket [ticket-registry princ]
+  (let [tid (new-tid "TGC")
+        tgt {:type :tgt, :tid tid, :princ princ :sts {}}]
+    (put-ticket ticket-registry tgt TGT-TIMEOUT)))
 
 
-(defn grant-st-ticket
-  [ticket-registry
-   svc-url service tgt]
-  (let [sid (new-tid ticket-registry "ST")
-        svt {:type :svt :tid sid, :url svc-url :service service :tgt tgt :used false :atime (ku/cur-time)}]
-    (put-ticket ticket-registry (assoc tgt :atime (ku/cur-time)))
-    (put-ticket ticket-registry svt)))
+(defn grant-st-ticket [ticket-registry svc-url service tgt]
+  (let [sid (new-tid "ST")
+        sts (assoc (:sts tgt) sid (+ (ku/cur-time) ST-FRESH-TIMEOUT))
+        svt {:type :svt :tid sid, :url svc-url :service service :tgt tgt, :used false}]
+    (put-ticket ticket-registry (assoc tgt :sts sts) TGT-TIMEOUT)
+    (put-ticket ticket-registry svt ST-FRESH-TIMEOUT)))
 
 
-; TODO odsyłanie IOU przeniesc do innego modułu
-(defn send-pgt-iou [pgt-url tid iou]
-  ; TODO configure IOU
-  true)
+(defn expend-ticket [ticket-registry svt]
+  (let [tgt (get-ticket ticket-registry (:tid (:tgt svt)))
+        sts (assoc (:sts tgt) (:sid svt) (+ (ku/cur-time) ST-USED-TIMEOUT))]
+    (put-ticket ticket-registry (assoc tgt :sts sts, :timeout (+ (ku/cur-time) TGT-TIMEOUT)) TGT-TIMEOUT)
+    (put-ticket ticket-registry (assoc svt :used true) ST-USED-TIMEOUT)))
 
 
-(defn grant-pgt-ticket
-  [ticket-registry
-   {service :service tgt :tgt}
-   pgt-url]
-  (let [tid (new-tid ticket-registry "PGT")
-        iou (new-tid ticket-registry "PGTIOU")
-        pgt {:type :pgt :tid tid :iou iou :url pgt-url :service service :tgt tgt :atime (ku/cur-time)}]
+(defn grant-pgt-ticket [ticket-registry tgt pgt-url]
+  (let [tid (new-tid "PGT")
+        iou (new-tid "PGTIOU")
+        pgt {:type :pgt, :tid tid, :iou iou, :url pgt-url, :service (:service tgt), :tgt tgt, :atime (ku/cur-time)}]
     ; TODO check if service is allowed to issue PGT on given pgt-url
     ; TODO check if pgt-url is secure
-    (when (send-pgt-iou pgt-url tid iou)
-      (put-ticket ticket-registry pgt))))
+    (put-ticket ticket-registry pgt TGT-TIMEOUT)))
 
 
 (defn grant-pt-ticket
-  [ticket-registry
-   {service :service :as pgt}
-   svc-url]
-  (let [tid (new-tid ticket-registry "PT")
-        pt {:type :pt :tid tid :url svc-url :service service :pgt pgt :atime (ku/cur-time)}]
+  [ticket-registry {:keys [service tgt] :as pgt} svc-url]
+  (let [tid (new-tid "PT")
+        sts (assoc (:sts tgt) tid (+ (ku/cur-time) ST-FRESH-TIMEOUT))
+        pt {:type :pt, :tid tid, :url svc-url, :service service, :pgt pgt, :atime (ku/cur-time)}]
     ; TODO check ticket validity etc.
-    (put-ticket ticket-registry (assoc pgt :atime (ku/cur-time)))
-    (put-ticket ticket-registry pt)))
+    (put-ticket ticket-registry pt ST-FRESH-TIMEOUT)
+    (put-ticket ticket-registry pgt TGT-TIMEOUT)
+    (put-ticket ticket-registry (assoc tgt :sts sts) TGT-TIMEOUT)))
+
+(defn session-tickets [ticket-registry tgt]
+  (for [tid (keys (:sts tgt))]
+    (get-ticket ticket-registry tid)))
 
 
-(defn clear-session
-  [tr tid]
+(defn clear-session [tr tid]
   (if-let [tgt (get-ticket tr tid)]
-    (doseq [tkt (session-tickets tr tgt)]
+    (doseq [tkt (keys (:sts tgt))]
       (del-ticket tr tkt)))
   (del-ticket tr tid))
+
+
+
+;(defn ticket-cleaner-task-old [app-state & {:keys [interval] :or {:interval 60000}}]
+;  (future
+;    (loop []
+;      (Thread/sleep interval)
+;      (try
+;        (let [ticket-registry (:ticket-registry @app-state)]
+;          (log/debug "KCORE-D002: Cleaning up timed out tickets ...")
+;          ;(kt/clean-tickets ticket-registry :svt 300000)
+;          ;(kt/clean-tickets ticket-registry :pt 300000)
+;          ;(kt/clean-tickets ticket-registry :pgt 36000000)
+;          ;(kt/clean-tickets ticket-registry :tgt 36000000)
+;          )                                                 ; TODO wylogowywanie sesji z przeterminowanych ticketów TGT (?? czy na pewno ??)
+;        (catch Throwable e
+;          (log/error "KCODE-E002: Error while cleaning up ticket registry:" e)))
+;      (recur))))
+;
+
