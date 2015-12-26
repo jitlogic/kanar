@@ -10,6 +10,7 @@
 
 (defonce TID-SEQ (atom 0))
 
+
 (defprotocol ticket-registry
   "Protocol for ticket registry implementations. "
   (get-ticket [tr tid]
@@ -76,7 +77,8 @@
 
 
 (defn grant-st-ticket [ticket-registry svc-url service tgt]
-  (let [sid (new-tid "ST")
+  (let [tgt (get-ticket ticket-registry (:tid tgt tgt))
+        sid (new-tid "ST")
         sts (assoc (:sts tgt) sid (+ (ku/cur-time) ST-FRESH-TIMEOUT))
         svt {:type :svt :tid sid, :url svc-url :service service :tgt tgt, :used false}]
     (put-ticket ticket-registry (assoc tgt :sts sts) TGT-TIMEOUT)
@@ -91,7 +93,8 @@
 
 
 (defn grant-pgt-ticket [ticket-registry tgt pgt-url]
-  (let [tid (new-tid "PGT")
+  (let [tgt (get-ticket ticket-registry (:tid tgt tgt))
+        tid (new-tid "PGT")
         iou (new-tid "PGTIOU")
         pgt {:type :pgt, :tid tid, :iou iou, :url pgt-url, :service (:service tgt), :tgt tgt, :atime (ku/cur-time)}]
     ; TODO check if service is allowed to issue PGT on given pgt-url
@@ -101,7 +104,8 @@
 
 (defn grant-pt-ticket
   [ticket-registry {:keys [service tgt] :as pgt} svc-url]
-  (let [tid (new-tid "PT")
+  (let [tgt (get-ticket ticket-registry (:tid tgt tgt))
+        tid (new-tid "PT")
         sts (assoc (:sts tgt) tid (+ (ku/cur-time) ST-FRESH-TIMEOUT))
         pt {:type :pt, :tid tid, :url svc-url, :service service, :pgt pgt, :atime (ku/cur-time)}]
     ; TODO check ticket validity etc.
@@ -110,8 +114,9 @@
     (put-ticket ticket-registry (assoc tgt :sts sts) TGT-TIMEOUT)))
 
 (defn session-tickets [ticket-registry tgt]
-  (for [tid (keys (:sts tgt))]
-    (get-ticket ticket-registry tid)))
+  (let [tgt (get-ticket ticket-registry (:tid tgt tgt))]
+    (for [tid (keys (:sts tgt))]
+      (get-ticket ticket-registry tid))))
 
 
 (defn clear-session [tr tid]

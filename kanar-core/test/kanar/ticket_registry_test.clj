@@ -47,18 +47,18 @@
     (is (= 1 (count (kt/session-tickets *treg* tgt2))))))
 
 
-(deftest grant-tgt-and-check-if-atime-is-updated
-  (let [tgt (kt/grant-tgt-ticket *treg* {:id "a"})
-        st (kt/grant-st-ticket *treg* "" {} tgt)
-        pgt (kt/grant-pgt-ticket *treg* st "")]
-    (is (= 0 (:atime tgt)))
-    (is (= 0 (:atime pgt)))
-    (is (= 0 (:atime st)))
-    (TT 100)
-    (kt/grant-st-ticket *treg* "url1" {} tgt)
-    (is (= 100 (:atime (kt/get-ticket *treg* (:tid tgt)))))
-    (kt/grant-pt-ticket *treg* pgt "")
-    (is (= 100 (:atime (kt/get-ticket *treg* (:tid pgt)))))
-    ))
-
+;(deftest grant-tgt-and-check-if-atime-is-updated
+;  (let [tgt (kt/grant-tgt-ticket *treg* {:id "a"})
+;        st (kt/grant-st-ticket *treg* "" {} tgt)
+;        pgt (kt/grant-pgt-ticket *treg* st "")]
+;    (is (= 0 (:atime tgt)))
+;    (is (= 0 (:atime pgt)))
+;    (is (= 0 (:atime st)))
+;    (TT 100)
+;    (kt/grant-st-ticket *treg* "url1" {} tgt)
+;    (is (= 100 (:atime (kt/get-ticket *treg* (:tid tgt)))))
+;    (kt/grant-pt-ticket *treg* pgt "")
+;    (is (= 100 (:atime (kt/get-ticket *treg* (:tid pgt)))))
+;    ))
+;
 
