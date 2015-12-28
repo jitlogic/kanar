@@ -76,8 +76,8 @@
     (put-ticket ticket-registry tgt TGT-TIMEOUT)))
 
 
-(defn grant-st-ticket [ticket-registry svc-url service tgt]
-  (let [tgt (get-ticket ticket-registry (:tid tgt tgt))
+(defn grant-st-ticket [ticket-registry svc-url service tid]
+  (let [tgt (get-ticket ticket-registry tid)
         sid (new-tid "ST")
         sts (assoc (:sts tgt) sid (+ (ku/cur-time) ST-FRESH-TIMEOUT))
         svt {:type :svt :tid sid, :url svc-url :service service :tgt tgt, :used false}]
@@ -85,26 +85,29 @@
     (put-ticket ticket-registry svt ST-FRESH-TIMEOUT)))
 
 
-(defn expend-ticket [ticket-registry svt]
-  (let [tgt (get-ticket ticket-registry (:tid (:tgt svt)))
+(defn expend-ticket [ticket-registry sid]
+  (let [svt (get-ticket ticket-registry sid)
+        tgt (get-ticket ticket-registry (:tid (:tgt svt)))
         sts (assoc (:sts tgt) (:sid svt) (+ (ku/cur-time) ST-USED-TIMEOUT))]
     (put-ticket ticket-registry (assoc tgt :sts sts, :timeout (+ (ku/cur-time) TGT-TIMEOUT)) TGT-TIMEOUT)
     (put-ticket ticket-registry (assoc svt :used true) ST-USED-TIMEOUT)))
 
 
-(defn grant-pgt-ticket [ticket-registry tgt pgt-url]
-  (let [tgt (get-ticket ticket-registry (:tid tgt tgt))
+(defn grant-pgt-ticket [ticket-registry tid pgt-url]
+  (let [svt (get-ticket ticket-registry tid)
+        tgt (get-ticket ticket-registry (:tid (:tgt svt)))
         tid (new-tid "PGT")
         iou (new-tid "PGTIOU")
         pgt {:type :pgt, :tid tid, :iou iou, :url pgt-url, :service (:service tgt), :tgt tgt, :atime (ku/cur-time)}]
+    ; TODO alokowanie i usuwanie ticketów PGT jest kompletnie skasztanione ...
     ; TODO check if service is allowed to issue PGT on given pgt-url
     ; TODO check if pgt-url is secure
     (put-ticket ticket-registry pgt TGT-TIMEOUT)))
 
 
 (defn grant-pt-ticket
-  [ticket-registry {:keys [service tgt] :as pgt} svc-url]
-  (let [tgt (get-ticket ticket-registry (:tid tgt tgt))
+  [ticket-registry {:keys [service tid] :as pgt} svc-url]
+  (let [tgt (get-ticket ticket-registry tid)
         tid (new-tid "PT")
         sts (assoc (:sts tgt) tid (+ (ku/cur-time) ST-FRESH-TIMEOUT))
         pt {:type :pt, :tid tid, :url svc-url, :service service, :pgt pgt, :atime (ku/cur-time)}]
@@ -113,10 +116,11 @@
     (put-ticket ticket-registry pgt TGT-TIMEOUT)
     (put-ticket ticket-registry (assoc tgt :sts sts) TGT-TIMEOUT)))
 
-(defn session-tickets [ticket-registry tgt]
-  (let [tgt (get-ticket ticket-registry (:tid tgt tgt))]
-    (for [tid (keys (:sts tgt))]
-      (get-ticket ticket-registry tid))))
+(defn session-tickets [ticket-registry tid]
+  (let [tgt (get-ticket ticket-registry tid)]
+    (for [tid (keys (:sts tgt))
+          :let [t (get-ticket ticket-registry tid)]
+          :when t] t)))
 
 
 (defn clear-session [tr tid]

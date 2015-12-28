@@ -84,7 +84,7 @@
                  :url (str "login?" svc-param "=" (ku/url-enc svc-url))
                  :dom (:dom tgt)) :tgt tgt, :req req}
         :else                                                 ; case 4: no 'warn' parameter present
-        (let [svt (kt/grant-st-ticket ticket-registry svc-url svc tgt)]
+        (let [svt (kt/grant-st-ticket ticket-registry svc-url svc (:tid tgt))]
           (audit app-state req tgt svc :SERVICE-TICKET-GRANTED)
           {:status  302
            :body    (render-message-view :ok "Login succesful.", :dom (:dom (:princ tgt)), :req req, :tgt tgt, :app-state app-state)
@@ -178,7 +178,7 @@
    {{service :service} :params, {{CASTGC :value} "CASTGC"} :cookies :as req}]
   (let [tgt (kt/get-ticket ticket-registry CASTGC)]
     (when tgt
-      (doseq [{{asu :app-urls} :service, url :url, :as svt} (kt/session-tickets ticket-registry tgt)
+      (doseq [{{asu :app-urls} :service, url :url, :as svt} (kt/session-tickets ticket-registry (:tid tgt))
               :when (.startsWith (:tid svt) "ST")]
         (if (empty? asu)                                    ; TODO co z pozostałymi typami ticketów ?
           (service-logout url svt)
@@ -200,7 +200,7 @@
   (let [svt (kt/get-ticket ticket-registry sid)
         valid (and svc-url sid svt (re-matches #"ST-.*" sid) (not (:used svt)) (= svc-url (:url svt)))] ; TODO obsłużenie opcji 'renew'
     (if svt
-      (kt/expend-ticket ticket-registry svt))
+      (kt/expend-ticket ticket-registry (:tid svt)))
     (audit app-state req nil nil (if valid :SERVICE-TICKET-VALIDATED :SERVICE-TICKET-NOT-VALIDATED))
     (log/trace "KCORE-D001: validating ticket" svt "-->" valid)
     (if valid
@@ -219,7 +219,7 @@
    re-tid]
   (let [svt (kt/get-ticket ticket-registry sid)]
     (if svt
-      (kt/expend-ticket ticket-registry svt))
+      (kt/expend-ticket ticket-registry (:tid svt)))
     (cond
       (empty? svc-url)
         (do
@@ -247,7 +247,7 @@
           (log/warn "KCORE-W004: cas20-validate-handler returns INVALID_SERVICE: Invalid service; sid:" sid "url:" svc-url)
           (kp/cas20-validate-error "INVALID_SERVICE" "Invalid service."))
       (and (not (empty? pgt-url)) (= :svt (:type svt)))
-        (if-let [pgt (kt/grant-pgt-ticket ticket-registry svt pgt-url)]
+        (if-let [pgt (kt/grant-pgt-ticket ticket-registry (:tid svt) pgt-url)]
           (do
             (audit app-state req nil nil :SERVICE-TICKET-NOT-VALIDATED)
             (log/info "KCORE-I005: cas20-validate-handler returns grant-pgt-ticket: PGT ticket granted; sid:" sid "url:" svc-url)
@@ -312,7 +312,7 @@
         sid (or SAMLart (kp/saml-parse-lookup-tid saml))
         svt (kt/get-ticket ticket-registry sid)]
     (if svt
-      (kt/expend-ticket ticket-registry svt))
+      (kt/expend-ticket ticket-registry (:tid svt)))
     (when-not (= svc-url (:url svt))
       (log/warn "KCORE-W012: Service and validation URL do not match: svc-url=" svc-url "but should be " (:url svt)))
     (if (and svc-url sid svt (not (:used svt)) (re-matches #"ST-.*" sid) ; TODO (= svc-url (:url svt))

@@ -93,7 +93,7 @@
                         {:ticket-seq          (atom 0)
                          :conf                {:server-id "SVR1"}
                          :services            *test-services*
-                         :ticket-registry     (kt/atom-ticket-registry *treg-atom* "SVR1")
+                         :ticket-registry     (kt/atom-ticket-registry *treg-atom*)
                          :render-message-view render-message-view
                          :audit-fn            test-audit-fn
                          :login-flow          (kc/form-login-flow authenticate render-login-view)
@@ -171,7 +171,7 @@
     (let [r (kanar { :uri "/login" :params {:username "test" :password "test" :lt "true" :service "https://my-app.com"}})]
       (is (= 302 (:status r)) "Should make redirect.")
       (is (get-rdr r))
-      (is (re-matches #"https://my-app.com.ticket=ST-.*-SVR1", (get-rdr r)))
+      (is (re-matches #"https://my-app.com.ticket=ST-.*-XXX", (get-rdr r)))
       (is (= 2 (count @*treg-atom*)) "Should create SSO ticket and service ticket."))))
 
 
@@ -180,7 +180,7 @@
     (let [r (kanar { :uri "/login" :params {:username "test" :password "test" :lt "true" :TARGET "https://my-app.com"}})]
       (is (= 302 (:status r)) "Should make redirect.")
       (is (get-rdr r))
-      (is (re-matches #"https://my-app.com.SAMLart=ST-.*-SVR1", (get-rdr r)))
+      (is (re-matches #"https://my-app.com.SAMLart=ST-.*-XXX", (get-rdr r)))
       (is (= 2 (count @*treg-atom*)) "Should create SSO ticket and service ticket."))))
 
 
@@ -189,7 +189,7 @@
     (let [r (kanar { :uri "/login" :params {:username "test" :password "test" :service "https://my-app.com" :warn nil}})
           v (read-string (:body r))]
       (is (= 200 (:status r)) "Should not make redirect.")
-      (is  (re-matches #"login.service=https://my-app.com.*", (:url (:args v)))) ; TODO tutaj ticket nie jest podawany
+      (is  (re-matches #"login.service=https%3A%2F%2Fmy-app.com.*", (:url (:args v)))) ; TODO tutaj ticket nie jest podawany
       (is (= 1 (count @*treg-atom*)) "Should create only ticket granting ticket."))))
 
 
@@ -246,7 +246,7 @@
     (let [r (kanar { :uri "/login" :params {:username "test" :password "test" :lt "true" :service "https://my-app.com"}})]
       (is (= 302 (:status r)) "Should make redirect.")
       (is (get-rdr r))
-      (is (re-matches #"https://my-app.com.ticket=ST-.*-SVR1", (get-rdr r)))
+      (is (re-matches #"https://my-app.com.ticket=ST-.*-XXX", (get-rdr r)))
       (is (= 2 (count @*treg-atom*)) "Should create SSO ticket and service ticket.")
       (kanar {:uri "/logout" :cookies {"CASTGC" {:value (get-tgc r)}}})
       (is (= 0 (count @*treg-atom*))))))
@@ -267,7 +267,7 @@
   (testing "Log in with correct password and validate service ticket using CAS 1.0 protocol"
     (let [r (kanar { :uri "/login" :params {:username "test" :password "test" :lt "true" :service "https://my-app"}})]
       (is (get-rdr r) "Location should not be empty.")
-      (let [sid (re-find (re-matcher #"ST-.*-SVR1" (get-rdr r)))]
+      (let [sid (re-find (re-matcher #"ST-.*-XXX" (get-rdr r)))]
         (is sid "Ticket ID should be extracted here.")
         (is (= 2 (count @*treg-atom*)) "Should create SSO ticket and service ticket.")
         (let [v (kanar { :uri "/validate" :params {:service "https://my-app" :ticket "XXX"}})]
@@ -282,7 +282,7 @@
   (testing "Log in with correct password and validate service ticket using CAS 2.0 protocol (no proxies)"
     (let [r (kanar { :uri "/login" :params {:username "test" :password "test" :lt "true" :service "https://my-app"}})]
       (is (get-rdr r) "Location should not be empty.")
-      (let [tid (re-find (re-matcher #"ST-.*-SVR1" (get-rdr r)))]
+      (let [tid (re-find (re-matcher #"ST-.*-XXX" (get-rdr r)))]
         (is tid "Ticket ID should be extracted here.")
         (is (= 2 (count @*treg-atom*)) "Should create SSO ticket and service ticket.")
         (let [v (kanar { :uri "/serviceValidate" :params {:service "https://my-app" :ticket "XXX"}})]
@@ -302,13 +302,13 @@
         (is (= 2 (count @*treg-atom*)) "Should create SSO ticket and service ticket.")
         (let [v (kanar {:uri "/samlValidate" :params {:TARGET "https://my-app" }
                         :body (kp/saml-validate-request "xxx")})]
-          (is (= "error executing SAML validation\n" (:body v))))
+          (is (= "Error executing SAML validation.\n" (:body v))))
         (let [v (kanar {:uri "/samlValidate" :params {:TARGET "https://my-app" }
                         :body (kp/saml-validate-request sid)})]
           (is (re-matches #".*saml1:NameIdentifier.test..saml1:NameIdentifier.*" (:body v))))
         (let [v (kanar {:uri "/samlValidate" :params {:TARGET "https://my-app"}
                         :body (kp/saml-validate-request sid)})]
-          (is (= "error executing SAML validation\n" (:body v))))))))
+          (is (= "Error executing SAML validation.\n" (:body v))))))))
 
 
 (deftest test-single-sign-out
