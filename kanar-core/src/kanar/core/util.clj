@@ -1,8 +1,19 @@
 (ns kanar.core.util
   (:import (java.text SimpleDateFormat)
-           (java.util Date TimeZone)
+           (java.util Date TimeZone Collections)
            (java.net URLEncoder)
-           (javax.xml.bind DatatypeConverter))
+           (javax.xml.bind DatatypeConverter)
+           (javax.xml.transform.dom DOMResult)
+           (javax.xml.stream XMLOutputFactory)
+           (javax.xml.parsers DocumentBuilderFactory)
+           (com.sun.org.apache.xml.internal.serialize OutputFormat XMLSerializer)
+           (org.w3c.dom Document)
+           (java.io StringWriter)
+           (javax.xml.crypto.dsig XMLSignatureFactory DigestMethod Transform CanonicalizationMethod SignatureMethod XMLSignature)
+           (javax.xml.crypto.dsig.spec TransformParameterSpec C14NMethodParameterSpec)
+           (java.security KeyPair PublicKey KeyStore)
+           (javax.xml.crypto.dsig.dom DOMSignContext DOMValidateContext)
+           (javax.xml.crypto KeySelector))
   (:require
     [slingshot.slingshot :refer [try+ throw+]]
     [taoensso.timbre :as log]
@@ -18,7 +29,9 @@
     (apply str (for [_ (range len)] (rand-nth s)))))
 
 
-(defn cur-time [] (System/currentTimeMillis))
+(defn cur-time
+  ([] (System/currentTimeMillis))
+  ([^Long o] (+ (System/currentTimeMillis) o)))
 
 
 (defn xml-time
@@ -46,6 +59,65 @@
 
 (defn emit-xml [el]
   (.substring (xml/emit-str (xml/sexp-as-element el)) 38))
+
+
+(defn emit-dom [el]
+  (let [xmlf (XMLOutputFactory/newInstance)
+        docf (DocumentBuilderFactory/newInstance)
+        docb (.newDocumentBuilder docf)
+        rslt (DOMResult. (.newDocument docb))
+        e (xml/sexp-as-element el)
+        writer (-> xmlf (.createXMLStreamWriter rslt))]
+    (doseq [event (xml/flatten-elements [e])]
+      (xml/emit-event event writer))
+    (.getNode rslt)))
+
+
+(defn xml-sign [^Document doc ^KeyPair kp]
+  (let [sc (DOMSignContext. (.getPrivate kp) (.getDocumentElement doc))
+        xf (XMLSignatureFactory/getInstance "DOM")
+        dm (.newDigestMethod xf DigestMethod/SHA1 nil)
+        ^TransformParameterSpec tp nil
+        tr (.newTransform xf Transform/ENVELOPED tp)
+        rf (.newReference xf "" dm (Collections/singletonList tr) nil nil)
+        ^C14NMethodParameterSpec mp nil
+        cm (.newCanonicalizationMethod xf CanonicalizationMethod/INCLUSIVE mp)
+        sm (.newSignatureMethod xf SignatureMethod/DSA_SHA1 nil)
+        si (.newSignedInfo xf cm sm (Collections/singletonList rf))
+        kf (.getKeyInfoFactory xf)
+        kv (.newKeyValue kf (.getPublic kp))
+        ki (.newKeyInfo kf (Collections/singletonList kv))
+        xs (.newXMLSignature xf si ki)]
+    (.sign xs sc)
+    doc))
+
+(defn xml-validate [^Document doc, ^PublicKey k]
+  (let [nl (.getElementsByTagNameNS doc XMLSignature/XMLNS "Signature")]
+    (when (= 0 (.getLength nl))
+      (throw+ {:type :xml-validation :msg "Cannot find signature element"}))
+    (let [vc (DOMValidateContext. (KeySelector/singletonKeySelector k) (.item nl 0))
+          xf (XMLSignatureFactory/getInstance "DOM")
+          sg (.unmarshalXMLSignature xf vc)
+          cv (.validate sg vc)]
+      (when-not (.validate sg vc)
+        (throw+ {:type :xml-validation :msg "Cannot validate signature."})))))
+
+
+(defn read-key-pair [{:keys [path pass alias]}]
+  (with-open [f (clojure.java.io/input-stream path)]
+    (let [ks (KeyStore/getInstance (KeyStore/getDefaultType))]
+      (.load ks f (.toCharArray pass))
+      (let [prv (.getKey ks alias (.toCharArray pass))
+            pub (.getPublicKey (.getCertificate ks alias))]
+        (KeyPair. pub prv)))))
+
+
+(defn dom-to-str [node]
+  (let [f (OutputFormat. node)
+        sw (StringWriter.)]
+    (.setIndenting f false)
+    (.serialize (XMLSerializer. sw f) ^Document node)
+    (.toString sw)))
 
 
 (defn secure-cookie [val]

@@ -1,4 +1,5 @@
-(ns kanar.testutil)
+(ns kanar.testutil
+  (:import (java.security KeyPairGenerator SecureRandom)))
 
 
 ; Helper functions
@@ -24,4 +25,9 @@
     (second m)))
 
 
+(defn gen-dsa-keypair [len]
+  (let [kg (KeyPairGenerator/getInstance "DSA" "SUN")
+        sr (SecureRandom/getInstance "SHA1PRNG" "SUN")]
+    (.initialize kg ^Integer len)
+    (.generateKeyPair kg)))
 
