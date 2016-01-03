@@ -76,11 +76,11 @@
     (put-ticket ticket-registry tgt TGT-TIMEOUT)))
 
 
-(defn grant-st-ticket [ticket-registry svc-url service tid]
+(defn grant-st-ticket [ticket-registry svc-url service tid & {:as extras}]
   (let [tgt (get-ticket ticket-registry tid)
         sid (new-tid "ST")
         sts (assoc (:sts tgt) sid (+ (ku/cur-time) ST-FRESH-TIMEOUT))
-        svt {:type :svt :tid sid, :url svc-url :service service :tgt tgt, :used false}]
+        svt (merge extras {:type :svt :tid sid, :url svc-url :service service :tgt tgt, :used false})]
     (put-ticket ticket-registry (assoc tgt :sts sts) TGT-TIMEOUT)
     (put-ticket ticket-registry svt ST-FRESH-TIMEOUT)))
 

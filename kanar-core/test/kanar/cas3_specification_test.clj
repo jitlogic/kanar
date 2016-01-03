@@ -2,138 +2,19 @@
   "CAS 3.0 specification compliance test suite."
   (:require
     [clojure.test :refer :all]
-    [compojure.core :refer [routes GET ANY rfn]]
     [compojure.route :refer [not-found]]
     [ring.util.response :refer [redirect]]
     [kanar.core :as kc]
     [kanar.core.protocol :as kp]
-    [kanar.core.ticket :as kt]
-    [kanar.core.util :as ku]
+    [kanar.testutil :refer :all]
     [slingshot.slingshot :refer [try+ throw+]]
     ))
 
-; Data and fixture.
-
-(def ^:dynamic *treg-atom* (atom {}))
-(def ^:dynamic kanar nil)
-(def ^:dynamic *sso-logouts* (atom []))
-
-
-; TODO config.clj module (with default configuration & default component implementations
-
-
-; TODO dopisać numerki rozdziałów CAS 3.0 Specification
-
-
-(def ^:dynamic *test-services*
-  [{:id :verboten :url #"https://verboten.com" :verboten true}
-   {:id :test1 :url #"https://test1.com" :app-urls [ "http://srv1:8080/test1" "http://srv2:8080/test1" ] }
-   {:id :all :url #"https://.*"}])
-
-
-(defn render-login-view [& {:as args}]
-  (pr-str {:view :login :args (dissoc args :app-state)}))
-
-
-(defn render-message-view [status msg & {:as args}]
-  (pr-str {:view :message :status status :msg msg :args (dissoc args :app-state)}))
-
-
-(defn render-su-login-view [& {:as args}]
-  (pr-str {:view :sulogin :args (dissoc args :app-state)}))
-
-
-(defn authenticate [princ {{username :username password :password dom :dom} :params :as req}]
-  "Basic authentication function.
-  princ - principal data (or null if still not authenticated)
-  req - HTTP request object (with form params)
-  "
-  (if princ
-    princ
-    (if (= username password)
-      {:id username :attributes {} :dom dom}
-      (ku/login-failed "Invalid username or password."))))
-
-
-(defn select-kanar-domain [{{:keys [dom]} :params}]
-  (if (string? dom) (keyword dom) :unknown))
-
-
-
-; TODO przenieść konsturkcję tego do dedykowanego config namespace;
-(defn kanar-routes-new [app-state]
-  (routes
-    (ANY "/login" req                                       ; TODO ANY -> POST/GET
-         (kc/login-handler (:login-flow @app-state) @app-state req))
-    ;(ANY "/sulogin" req                                     ; TODO ograniczyć do POST/GET
-    ;     (kc/login-handler (kc/form-login-flow authenticate render-su-login-view) @app-state req))
-    (ANY "/logout" req                                      ; TODO ograniczyć do GET
-         (kc/logout-handler @app-state req))
-    (ANY "/validate" req                                    ; TODO ograniczyć do POST
-         (kc/cas10-validate-handler @app-state req))
-    (ANY "/serviceValidate" req                             ; TODO ograniczyć do POST
-         (kc/cas20-validate-handler @app-state req #"ST-.*"))
-    (ANY "/proxyValidate" req                               ; TODO ograniczyć do POST
-         (kc/cas20-validate-handler @app-state req #"(ST|PT)-.*"))
-    (ANY "/proxy" req                                       ; TODO ograniczyć do POST;
-         (kc/proxy-handler @app-state req))
-    (ANY "/samlValidate" req
-         (kc/saml-validate-handler @app-state req))
-    (ANY "/*" []
-      (redirect "login"))))
-
-(defn test-audit-fn [_ _ _ _ _])
-
-(defn basic-test-fixture [f]
-  (reset! *treg-atom* {})
-  (reset! *sso-logouts* [])
-  (binding [kanar (ku/wrap-set-param
-                    (kanar-routes-new
-                      (atom
-                        {:ticket-seq          (atom 0)
-                         :conf                {:server-id "SVR1"}
-                         :services            *test-services*
-                         :ticket-registry     (kt/atom-ticket-registry *treg-atom*)
-                         :render-message-view render-message-view
-                         :audit-fn            test-audit-fn
-                         :login-flow          (kc/form-login-flow authenticate render-login-view)
-                         :svc-auth-fn (fn [_ _ svc _] (not (:verboten svc)))
-                         }))
-                    :dom select-kanar-domain)]
-    (with-redefs
-      [kc/service-logout (fn [_ _] nil)]
-      (f))))
 
 
 (use-fixtures :each basic-test-fixture)
 
 
-
-; Utility functions for unit tests
-
-(defn get-tgc [r]
-  "Extracts SSO ticket ID from HTTP response."
-  (get-in r [:cookies "CASTGC" :value]))
-
-
-(defn get-rdr [r]
-  "Extracts redirection URL from HTTP response."
-  (get-in r [:headers "Location"]))
-
-(defn get-ticket [r]
-  (let [rdr (get-rdr r)
-        m (re-matches #".*ticket=(.*)" rdr)]
-    (second m)))
-
-
-(defn get-samlart [r]
-  (let [rdr (get-rdr r)
-        m (re-matches #".*SAMLart=(.*)" rdr)]
-    (second m)))
-
-
-(defn dummy-service-logout [url {tid :tid}]
-  (swap! *sso-logouts* #(conj % {:url url :tid tid})))
 
 ; Unit Tests
 

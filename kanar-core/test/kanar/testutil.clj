@@ -1,4 +1,11 @@
 (ns kanar.testutil
+  (:require
+    [kanar.core.util :as ku]
+    [kanar.core :as kc]
+    [kanar.core.saml :as kcs]
+    [kanar.core.ticket :as kt]
+    [ring.util.response :refer [redirect]]
+    [compojure.core :refer [routes GET ANY rfn]])
   (:import (java.security KeyPairGenerator SecureRandom)))
 
 
@@ -13,6 +20,7 @@
   "Extracts redirection URL from HTTP response."
   (get-in r [:headers "Location"]))
 
+
 (defn get-ticket [r]
   (let [rdr (get-rdr r)
         m (re-matches #".*ticket=(.*)" rdr)]
@@ -25,9 +33,105 @@
     (second m)))
 
 
+(defn get-samlresp [r]
+  (let [rdr (get-rdr r)
+        m (re-matches #".*SAMLResponse=(.*)" rdr)]
+    (second m)))
+
+
 (defn gen-dsa-keypair [len]
-  (let [kg (KeyPairGenerator/getInstance "DSA" "SUN")
-        sr (SecureRandom/getInstance "SHA1PRNG" "SUN")]
+  (let [kg (KeyPairGenerator/getInstance "DSA" "SUN")]
     (.initialize kg ^Integer len)
     (.generateKeyPair kg)))
+
+
+; Generic end-to-end test fixture
+
+(defn test-audit-fn [_ _ _ _ _])
+
+(def ^:dynamic *dsa-key-pair* (gen-dsa-keypair 1024))
+(def ^:dynamic *treg-atom* (atom {}))
+(def ^:dynamic kanar nil)
+(def ^:dynamic *sso-logouts* (atom []))
+
+(defn reset-fixture []
+  (reset! *treg-atom* {})
+  (reset! *sso-logouts* []))
+
+(defn render-login-view [& {:as args}]
+  (pr-str {:view :login :args (dissoc args :app-state)}))
+
+
+(defn render-message-view [status msg & {:as args}]
+  (pr-str {:view :message :status status :msg msg :args (dissoc args :app-state)}))
+
+
+(defn authenticate [princ {{username :username password :password dom :dom} :params :as req}]
+  "Basic authentication function.
+  princ - principal data (or null if still not authenticated)
+  req - HTTP request object (with form params)
+  "
+  (if princ
+    princ
+    (if (= username password)
+      {:id username :attributes {} :dom dom}
+      (ku/login-failed "Invalid username or password."))))
+
+
+(defn select-kanar-domain [{{:keys [dom]} :params}]
+  (if (string? dom) (keyword dom) :unknown))
+
+
+(def ^:dynamic *test-services*
+  [{:id :verboten :url #"https://verboten.com" :verboten true}
+   {:id :test1 :url #"https://test1.com" :app-urls [ "http://srv1:8080/test1" "http://srv2:8080/test1" ] }
+   {:id :all :url #"https://.*"}])
+
+
+; TODO przenieść konsturkcję tego do dedykowanego config namespace;
+(defn kanar-routes-new [app-state]
+  (routes
+    (ANY "/login" req                                       ; TODO ANY -> POST/GET
+         (kc/login-handler (:login-flow @app-state) @app-state req))
+    (ANY "/samlLogin" req
+         (kcs/saml2-login-handler (:login-flow @app-state) @app-state req))
+    (ANY "/logout" req                                      ; TODO ograniczyć do GET
+         (kc/logout-handler @app-state req))
+    (ANY "/validate" req                                    ; TODO ograniczyć do POST
+         (kc/cas10-validate-handler @app-state req))
+    (ANY "/serviceValidate" req                             ; TODO ograniczyć do POST
+         (kc/cas20-validate-handler @app-state req #"ST-.*"))
+    (ANY "/proxyValidate" req                               ; TODO ograniczyć do POST
+         (kc/cas20-validate-handler @app-state req #"(ST|PT)-.*"))
+    (ANY "/proxy" req                                       ; TODO ograniczyć do POST;
+         (kc/proxy-handler @app-state req))
+    (ANY "/samlValidate" req
+         (kc/saml-validate-handler @app-state req))
+    (ANY "/*" []
+         (redirect "login"))))
+
+
+(defn basic-test-fixture [f]
+  (reset-fixture)
+  (binding [kanar (ku/wrap-set-param
+                    (kanar-routes-new
+                      (atom
+                        {:ticket-seq          (atom 0)
+                         :conf                {:server-id "SVR1"}
+                         :services            *test-services*
+                         :ticket-registry     (kt/atom-ticket-registry *treg-atom*)
+                         :render-message-view render-message-view
+                         :audit-fn            test-audit-fn
+                         :saml2-key-pair        *dsa-key-pair*
+                         :login-flow          (kc/form-login-flow authenticate render-login-view)
+                         :svc-auth-fn (fn [_ _ svc _] (not (:verboten svc)))
+                         }))
+                    :dom select-kanar-domain)]
+    (with-redefs
+      [kc/service-logout (fn [_ _] nil)]
+      (f))))
+
+
+(defn dummy-service-logout [url {tid :tid}]
+  (swap! *sso-logouts* #(conj % {:url url :tid tid})))
 

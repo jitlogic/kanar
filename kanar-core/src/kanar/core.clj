@@ -79,6 +79,7 @@
         (contains? params :warn)                              ; case 3: 'warn' parameter present
         {:status 200
          :headers {"Content-Type" "text/html; charset=utf-8"}
+         :cookies {"CASTGC" (ku/secure-cookie (:tid tgt))}
          :body (render-message-view
                  :ok "Login succesful."
                  :url (str "login?" svc-param "=" (ku/url-enc svc-url))
