@@ -83,9 +83,20 @@
       saml2-raw-success-resp
       ku/emit-dom
       (ku/xml-sign kp)
-      ku/dom-to-str
-      deflate-str
-      DatatypeConverter/printBase64Binary))
+      ku/dom-to-str))
+
+
+(defn render-saml-redirect-form [url fields]
+  (str
+    "<!DOCTYPE html>"
+    (ku/emit-xml
+      [:html [:head]
+       [:body {:onload "javascript:document.samlLoginForm.submit()"}
+        [:div {:style "display: none;"}
+         [:form {:name "samlLoginForm" :action url :method "post"}
+          (for [[k v] fields]
+            [:textarea {:name (name k)} v])
+          [:input {:type "submit" :value "Submit SAML Response"}]]]]])))
 
 
 (defn saml2-service-redirect [{:keys [services ticket-registry render-message-view saml2-key-pair] :as app-state}
@@ -115,23 +126,22 @@
        :headers {"Content-Type" "text/html; charset=utf-8"}
        :body (render-message-view
                :ok "Login succesful."
-               :url (str "saml2login?SAMLRequest=" (ku/url-enc (:SAMLRequest params)))
+               :url (str "saml2login?SAMLRequest=" (ku/url-enc (:SAMLRequest params)) "&RelayState=" (ku/url-enc (:RelayState params)))
                :dom (:dom tgt)) :tgt tgt, :req req}
       :else                                                 ; case 4: no 'warn' parameter present
       (let [svt (kt/grant-st-ticket ticket-registry svc-url svc (:tid tgt) :saml-req saml-req)
             sr (saml2-param-success-resp svt saml2-key-pair)]
         (kc/audit app-state req tgt svc :SERVICE-TICKET-GRANTED)
         {:status  302
-         :body    (render-message-view :ok "Login succesful.", :dom (:dom (:princ tgt)), :req req, :tgt tgt, :app-state app-state)
-         :headers {"Location"     (str svc-url (if (.contains svc-url "?") "&" "?") "SAMLResponse=" (ku/url-enc sr))
-                   "Content-Type" "text/html; charset=utf-8"}
+         :body    (render-saml-redirect-form (:url svt) {:SAMLResponse sr :RelayState (:RelayState params)})
+         :headers {"Content-Type" "text/html; charset=utf-8"}
          :cookies {"CASTGC" (ku/secure-cookie (:tid tgt))}})
       )))
 
 
 (defn saml2-login-handler [login-flow-fn
-                           {:keys [services ticket-registry render-message-view] :as app-state}
-                           {{{CASTGC :value} "CASTGC"} :cookies, {:keys [SAMLRequest renew] :as params} :params :as req}]
+                           {:keys [ticket-registry] :as app-state}
+                           {{{CASTGC :value} "CASTGC"} :cookies, {:keys [SAMLRequest renew]} :params :as req}]
   (let [tgc (kt/get-ticket ticket-registry CASTGC)
         saml-req (saml2-parse-req SAMLRequest)]
     (cond
