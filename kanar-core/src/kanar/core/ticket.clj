@@ -148,3 +148,7 @@
 ;      (recur))))
 ;
 
+
+
+(defn ticket-atom-cleaner-task [tickets-atom]
+  "TODO implement this for atom ticket registry")

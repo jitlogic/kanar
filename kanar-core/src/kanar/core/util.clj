@@ -8,7 +8,7 @@
            (javax.xml.parsers DocumentBuilderFactory)
            (com.sun.org.apache.xml.internal.serialize OutputFormat XMLSerializer)
            (org.w3c.dom Document)
-           (java.io StringWriter)
+           (java.io StringWriter FileInputStream)
            (javax.xml.crypto.dsig XMLSignatureFactory DigestMethod Transform CanonicalizationMethod SignatureMethod XMLSignature)
            (javax.xml.crypto.dsig.spec TransformParameterSpec C14NMethodParameterSpec)
            (java.security KeyPair PublicKey KeyStore)
@@ -82,7 +82,7 @@
         rf (.newReference xf "" dm (Collections/singletonList tr) nil nil)
         ^C14NMethodParameterSpec mp nil
         cm (.newCanonicalizationMethod xf CanonicalizationMethod/INCLUSIVE mp)
-        sm (.newSignatureMethod xf SignatureMethod/DSA_SHA1 nil)
+        sm (.newSignatureMethod xf SignatureMethod/RSA_SHA1 nil)
         si (.newSignedInfo xf cm sm (Collections/singletonList rf))
         kf (.getKeyInfoFactory xf)
         kv (.newKeyValue kf (.getPublic kp))
@@ -103,11 +103,12 @@
         (throw+ {:type :xml-validation :msg "Cannot validate signature."})))))
 
 
-(defn read-key-pair [{:keys [path pass alias]}]
-  (with-open [f (clojure.java.io/input-stream path)]
+(defn read-key-pair [{:keys [keystore keypass alias] :as sconf}]
+  (log/info "Reading key store for SAML conf: " sconf)
+  (with-open [f (FileInputStream. ^String keystore)]
     (let [ks (KeyStore/getInstance (KeyStore/getDefaultType))]
-      (.load ks f (.toCharArray pass))
-      (let [prv (.getKey ks alias (.toCharArray pass))
+      (.load ks f (.toCharArray keypass))
+      (let [prv (.getKey ks alias (.toCharArray keypass))
             pub (.getPublicKey (.getCertificate ks alias))]
         (KeyPair. pub prv)))))
 

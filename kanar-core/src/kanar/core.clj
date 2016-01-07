@@ -100,10 +100,10 @@
    {{{CASTGC :value} "CASTGC"} :cookies,
     {:keys [renew gateway service TARGET]} :params :as req}]
 
-  (let [tgc (kt/get-ticket ticket-registry CASTGC)
+  (let [tgt (kt/get-ticket ticket-registry CASTGC)
         svc-url (or service TARGET)]
     (cond
-      (and (not tgc) (contains? kcs/BOOL_TRUE gateway))     ; Brak ticketu i parametr gateway
+      (and (not tgt) (contains? kcs/BOOL_TRUE gateway))     ; Brak ticketu i parametr gateway
       (do
         (log/info "KCORE-I004: gateway redirect to" svc-url)
         (if (kanar-service-lookup services svc-url)
@@ -113,7 +113,7 @@
           {:status  200
            :headers {"Content-Type" "text/html; charset=utf-8"}
            :body    (render-message-view :error "Service not allowed.")}))
-      (or renew (empty? tgc))                               ; brak ticketu lub parametr renew
+      (or renew (empty? tgt))                               ; brak ticketu lub parametr renew
       (do
         (let [tgt (kt/get-ticket ticket-registry CASTGC)]
           (if tgt
@@ -127,7 +127,7 @@
           (catch [:type :login-cont] {:keys [resp]} resp)
           (catch [:type :login-failed] {:keys [resp]} resp)))
       :else                                                 ; jest ticket
-      (kanar-service-redirect app-state req tgc))))
+      (kanar-service-redirect app-state req tgt))))
 
 
 

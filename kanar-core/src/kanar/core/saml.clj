@@ -4,7 +4,8 @@
     [kanar.core.util :as ku]
     [clojure.data.xml :as xml]
     [kanar.core.ticket :as kt]
-    [slingshot.slingshot :refer [try+ throw+]])
+    [slingshot.slingshot :refer [try+ throw+]]
+    [taoensso.timbre :as log])
   (:import (javax.xml.bind DatatypeConverter)
            (java.util.zip Deflater Inflater)
            (java.io ByteArrayOutputStream)))
@@ -39,32 +40,39 @@
 
 
 (defn saml2-raw-success-resp [svt]
-  [:samlp:Response
-   {:xmlns "urn:oasis:names:tc:SAML:2.0:assertion"
-    :xmlns:samlp "urn:oasis:names:tc:SAML:2.0:protocol"
-    :ID (ku/random-string 32)
-    :IssueInstant (ku/xml-time)
-    :Version "2.0"}
-   [:samlp:Status
-    [:samlp:StatusCode {:Value "urn:oasis:names:tc:SAML:2.0:status:Success"}]]
-   [:Assertion
-    {:ID (ku/random-string 32)
-     :Version "2.0"
-     :IssueInstant (ku/xml-time)}
-    [:Issuer "https://www.opensaml.org/IDP"]
-    [:Subject
-     [:NameID {:Format "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress" } (get-in svt [:tgt :princ :id])]
-     [:SubjectConfirmation { :Method "urn:oasis:names:tc:SAML:2.0:cm:bearer" }
-      [:SubjectConfirmationData
-       {:NotOnOrAfter (ku/xml-time (ku/cur-time -30000))
-        :Recipient    (:url svt),
-        :InResponseTo (:ID (:saml-req svt))}]]]
-    [:Conditions
-     {:NotBefore (ku/xml-time (ku/cur-time -30000))
-      :NotOnOrAfter (ku/xml-time (ku/cur-time 300000))}]
-    [:AuthnStatement {:AuthnInstant (ku/xml-time)}
-     [:AuthnContext [:AuthnContextClassRef "urn:oasis:names:tc:SAML:2.0:ac:classes:Password"]]]
-    ]])
+  (let [idt (:id-template (:service svt) "{{id}}")
+        uid (if idt (.replace idt "{{id}}" (get-in svt [:tgt :princ :id])))]
+    [:samlp:Response
+     {:xmlns:saml        "urn:oasis:names:tc:SAML:2.0:assertion"
+      :xmlns:samlp  "urn:oasis:names:tc:SAML:2.0:protocol"
+      :ID           (ku/random-string 40 "abcdefghijklmnopqrstuvwxyz")
+      :InResponseTo (:ID (:saml-req svt))
+      :IssueInstant (ku/xml-time)
+      :Version      "2.0"}
+     [:saml:Issuer "https://sso.resonant.io"]
+     [:samlp:Status
+      [:samlp:StatusCode {:Value "urn:oasis:names:tc:SAML:2.0:status:Success"}]]
+     [:saml:Assertion
+      {:ID           (ku/random-string 40 "abcdefghijklmnopqrstuvwxyz")
+       :Version      "2.0"
+       :IssueInstant (ku/xml-time)}
+      [:saml:Issuer "https://sso.resonant.io"]
+      [:saml:Subject
+       [:saml:NameID {:Format "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"} uid]
+       [:saml:SubjectConfirmation {:Method "urn:oasis:names:tc:SAML:2.0:cm:bearer"}
+        [:saml:SubjectConfirmationData
+         {:NotOnOrAfter (ku/xml-time (ku/cur-time -30000))
+          :Recipient    (:url svt),
+          :InResponseTo (:ID (:saml-req svt))}]]]
+      [:saml:Conditions
+       {:NotBefore    (ku/xml-time (ku/cur-time -30000))
+        :NotOnOrAfter (ku/xml-time (ku/cur-time 300000))}
+       [:saml:AudienceRestriction
+        [:saml:Audience "google.com"]]]
+      [:saml:AuthnStatement {:AuthnInstant (ku/xml-time)}
+       [:saml:AuthnContext
+        [:saml:AuthnContextClassRef "urn:oasis:names:tc:SAML:2.0:ac:classes:Password"]]]
+      ]]))
 
 
 (defn deflate-str [data]
@@ -142,10 +150,12 @@
 (defn saml2-login-handler [login-flow-fn
                            {:keys [ticket-registry] :as app-state}
                            {{{CASTGC :value} "CASTGC"} :cookies, {:keys [SAMLRequest renew]} :params :as req}]
-  (let [tgc (kt/get-ticket ticket-registry CASTGC)
+  (let [tgt (kt/get-ticket ticket-registry CASTGC)
         saml-req (saml2-parse-req SAMLRequest)]
+    (log/info "RAW_SAML_REQ=" SAMLRequest)
+    (log/info "SAML_REQ=" saml-req)
     (cond
-      (or renew (empty? tgc))                               ; brak ticketu lub parametr renew
+      (or renew (empty? tgt))                               ; brak ticketu lub parametr renew
       (do
         (let [tgt (kt/get-ticket ticket-registry CASTGC)]
           (if tgt
@@ -158,5 +168,7 @@
             (saml2-service-redirect app-state req saml-req tgt))
           (catch [:type :login-cont] {:keys [resp]} resp)
           (catch [:type :login-failed] {:keys [resp]} resp)))
+      :else
+      (saml2-service-redirect app-state req saml-req tgt)
       )))
 

@@ -10,8 +10,7 @@
   (:import (javax.xml.validation SchemaFactory Schema Validator)
            (javax.xml XMLConstants)
            (javax.xml.transform.stream StreamSource)
-           (java.io ByteArrayInputStream)
-           (javax.xml.bind DatatypeConverter)))
+           (java.io ByteArrayInputStream)))
 
 
 ; Use "default-src 'self'; img-src 'self' data: ; style-src 'self' 'unsafe-inline'" for inline images and styles.
@@ -114,7 +113,7 @@
         (vfn req msg))))
 
 
-(defn with-http-validations [f vvdefs vfns]
+(defn wrap-http-validations [f vvdefs vfns]
   (fn [req]
     (let [vfn (vfns (:uri req) (:default vfns))]
       (try+
@@ -190,6 +189,23 @@
           :headers xff-headers-vd}})
 
 
+(def saml2-login-vd
+  {:get {:params {:SAMLRequest {:re #".*" :msg "TODO check base64+zip+xml schema here" :optional true}
+                  :RelayState  {:re #".*" :msg "" :optional true}
+                  :gateway  {:re BOOL_RE :msg "Invalid parameters" :optional true}
+                  :warn     {:re BOOL_RE :msg "Invalid parameters" :optional true}}
+         :cookies tgc-cookies-ovd
+         :headers xff-headers-vd}
+   :post {:params {:SAMLRequest {:re #".*" :msg "TODO check base64+zip+xml schema here" :optional true}
+                   :RelayState  {:re #".*" :msg "" :optional true}
+                   :username {:re #"\s*([A-Za-z0-9\.\-\_]{1,64})\s*" :re-grp 1 :msg "Invalid or missing username"}
+                   :password {:re #".{1,64}" :msg "Invalid or missing password"}
+                   :gateway  {:re BOOL_RE :msg "Invalid parameters" :optional true}
+                   :warn     {:re BOOL_RE :msg "Invalid parameters" :optional true}}
+          :cookies tgc-cookies-ovd
+          :headers xff-headers-vd}})
+
+
 (def cas-logout-vd
   {:get
    {:params {:service svc-url-ovd}
@@ -240,4 +256,31 @@
                       :SAMLart {:re ST_TICKET_RE :msg "Invalid ticket" :optional true}}}
    :body    {:vfn (new-saml-vfn) :optional true}
    :headers xff-headers-vd})
+
+
+(def cas-standard-vdefs
+  {"/login" cas-login-vd
+   "/saml2login" saml2-login-vd
+   "/logout" cas-logout-vd
+   "/validate" cas10-ticket-vd
+   "/serviceValidate" cas20-ticket-vd
+   "/proxyValudate" cas20-proxy-validate-vd
+   "/proxy" cas20-proxy-vd
+   "/samlValidate" saml-validate-vd
+   :default {:get {}, :head {}}})
+
+
+(def cas-standard-vfns
+  {:default {:status 200, :body "Invalid request."}})
+
+
+(defn wrap-check-referer [f re]
+  "Zabezpieczenie przed niektórymi klasami XSS poprzez wymuszenie właściwego nagłówka Referer."
+  (fn [{headers :headers method :request-method :as req}]
+    (let [referer (get headers "Referer")]
+      (if (and (= method :post) referer (not (re-matches re referer)))
+        (do
+          (log/warn "Invalid referer:" referer)
+          {:status 200, :body "Security alert: invalid referer."})
+        (f req)))))
 

@@ -7,7 +7,8 @@
     [compojure.route :refer [not-found resources]]
     [kanar.core :as kc]
     [kanar.core.sec :as kcs]
-    [kanar.core.ticket :as kt]
+    [kanar.core.ticket :as kt] {{#with-saml}}
+    [kanar.core.saml :as kss] {{/with-saml}}
     [kanar.core.util :as ku]
     [kanar.core.fileauth :as kf] {{#with-ldap}}
     [clj-ldap.client :as ldap]
@@ -52,8 +53,12 @@
     (GET "/login" req
       (kc/login-handler (:form-login-flow @app-state) @app-state req))
     (POST "/login" req
-      (kc/login-handler (:form-login-flow @app-state) @app-state req))
-    (GET "/logout" req
+      (kc/login-handler (:form-login-flow @app-state) @app-state req)) {{#with-saml}}
+    (GET "/saml2login" req
+      (kss/saml2-login-handler (:form-login-flow @app-state) @app-state req))
+    (POST "saml2login" req
+      (kss/saml2-login-handler (:form-login-flow @app-state) @app-state req))
+    {{/with-saml}}(GET "/logout" req
       (kc/logout-handler @app-state req))
     (GET "/validate" req
       (kc/cas10-validate-handler @app-state req))
@@ -77,7 +82,10 @@
   (merge kcs/cas-standard-vfns
          {"/login" (fn [{ {:keys [username service TARGET]} :params} msg]
                      (kav/login-view :username username, :error-msg msg
-                                     :service service, :TARGET TARGET))}))
+                                     :service service, :TARGET TARGET))
+          "/saml2login" (fn [{ {:keys [username SAMLRequest RelayState]} :params} msg]
+                     (kav/login-view :username username, :error-msg msg
+                                     :SAMLRequest SAMLRequest :RelayState RelayState))}))
 
 (def kanar-handler
   (wrap-reload
@@ -114,20 +122,24 @@
   (let [{{#with-ldap}}ldap-conn (ldap/connect (:ldap-conf conf))
         auth-fn (ku/chain-auth-fn
                   (kl/ldap-auth-fn ldap-conn (:ldap-conf conf) [])
-                  (kl/ldap-attr-fn ldap-conn ATTR-MAP)){{/with-ldap}}
+                  (kl/ldap-attr-fn ldap-conn ATTR-MAP)) {{/with-ldap}}
         {{#with-file}}auth-db (atom users)
-         auth-fn (kf/file-auth-fn auth-db){{/with-file}}
-        {{#with-hazelcast}} hci (or (:hazelcast old-app-state) (kh/new-hazelcast (:hazelcast conf))) {{/with-hazelcast}}]
+         auth-fn (kf/file-auth-fn auth-db) {{/with-file}} {{#with-saml}}
+         saml2-key-pair (ku/read-key-pair (:saml2-conf conf)) {{/with-saml}}
+        {{#with-hazelcast}} hci (or (:hazelcast old-app-state) (kh/new-hazelcast (:hazelcast conf))) {{/with-hazelcast}}
+        {{#with-atom-tr}} ticket-atom (or (:ticket-atom old-app-state) (atom {})) {{/with-atom-tr}}]
     {:ticket-seq          (or (:ticket-seq old-app-state) (atom 0))
      :conf                conf
      :services            services {{#with-hazelcast}}
      :hazelcast           hci {{/with-hazelcast}}
+     {{#with-atom-tr}} :ticket-atom         ticket-atom {{/with-atom-tr}}
      :ticket-registry     (or (:ticket-registry old-app-state)
-          {{#with-atom-tr}}(kt/atom-ticket-registry (atom {}) (:server-id conf)) {{/with-atom-tr}}
+          {{#with-atom-tr}}(kt/atom-ticket-registry ticket-atom) {{/with-atom-tr}}
           {{#with-hazelcast}} (kh/hazelcast-ticket-registry (.getReplicatedMap hci "kanar.tickets")) {{/with-hazelcast}})
      :render-message-view kav/message-view
      :form-login-flow     (kc/form-login-flow auth-fn kav/login-view){{#with-file}}
-     :auth-db             auth-db{{/with-file}}
+     :auth-db             auth-db{{/with-file}} {{#with-saml}}
+     :saml2-key-pair      saml2-key-pair {{/with-saml}}
      :audit-fn            ({{name}}-audit-fn (to-path home-dir (-> conf :log-conf :audit :path)))}))
 
 
@@ -208,7 +220,7 @@
                                  {:ssl? true :ssl-port https-port
                                   :keystore https-keystore :key-password https-keypass}
                                  {}))))
-    (reset! ticket-cleaner-f (kc/ticket-cleaner-task *app-state*))
+    {{#with-atom-tr}} (reset! ticket-cleaner-f (kt/ticket-atom-cleaner-task (:ticket-atom *app-state*))) {{/with-atom-tr}}
     (when-not @repl-server
       (reset! repl-server (nrepl/start-server :bind "0.0.0.0" :port nrepl-port)))
     (if (= reload :auto)
