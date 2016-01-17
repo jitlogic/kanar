@@ -12,4 +12,5 @@
    [com.taoensso/timbre "4.0.2"]
    [com.cemerick/valip "0.3.2"]
    [clj-http "2.0.0"]
-   [org.clojure/test.check "0.9.0"]])
+   [org.clojure/test.check "0.9.0"]
+   [prismatic/schema "1.0.4"]])

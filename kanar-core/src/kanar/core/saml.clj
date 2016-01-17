@@ -107,11 +107,52 @@
           [:input {:type "submit" :value "Submit SAML Response"}]]]]])))
 
 
+; Core framework plugin functions.
+
+(defn parse-saml2-req [{{:keys [SAMLRequest RelayState]} :params :as req}]
+  "Parses SAML2 request. This function can be used with sso-request-parse-wfn."
+  (when SAMLRequest
+    (try+
+      (let [saml-req (saml2-parse-req SAMLRequest)]
+        (merge req
+               {:protocol     :saml, :subprotocol (if RelayState :google :default),
+                :service-url  (:AssertionConsumerServiceURL saml-req), :saml-req saml-req
+                :hidden-params {:SAMLRequest SAMLRequest}}
+               (if RelayState {:service-params {:RelayState RelayState}
+                               :hidden-params {:RelayState RelayState :SAMLRequest SAMLRequest}} {})))
+      (catch Object _
+        (log/error "Unparsable SAML request:" SAMLRequest)
+        nil))))
+
+
+(defmethod kc/service-redirect :saml [{:keys [hidden-params service-url]}]
+  (str
+    "<!DOCTYPE html>"
+    (ku/emit-xml
+      [:html [:head]
+       [:body {:onload "javascript:document.samlLoginForm.submit()"}
+        [:div {:style "display: none;"}
+         [:form {:name "samlLoginForm" :action service-url :method "post"}
+          (for [[k v] hidden-params]
+            [:textarea {:name (name k)} v])
+          [:input {:type "submit" :value "Submit SAML Response"}]]]]])))
+
+
+
+
+
+
+
+
+; Old stuff - to be removed
+
+(defn service-allowed [& _])
+
 (defn saml2-service-redirect [{:keys [services ticket-registry render-message-view saml2-key-pair] :as app-state}
                               {params :params :as req}
                               saml-req tgt]
   (let [svc-url (:AssertionConsumerServiceURL saml-req)
-        svc (kc/kanar-service-lookup services svc-url)]
+        svc (kc/service-lookup services svc-url)]
     (cond
       (not svc)                                             ; case 1: service not found
       (do
@@ -122,7 +163,7 @@
          :body    (render-message-view :ok (if svc-url "Invalid service URL." "Login successful.")
                                        :dom (:dom (:princ tgt)), :req req, :tgt tgt, :app-state app-state)
          :cookies {"CASTGC" (ku/secure-cookie (:tid tgt))}})
-      (not (kc/service-allowed app-state req tgt svc svc-url)) ; case 2: service not allowed
+      (not (service-allowed app-state req tgt svc svc-url)) ; case 2: service not allowed
       (do
         (kc/audit app-state req tgt svc :SERVICE-TICKET-REJECTED)
         {:status  200
@@ -171,4 +212,5 @@
       :else
       (saml2-service-redirect app-state req saml-req tgt)
       )))
+
 

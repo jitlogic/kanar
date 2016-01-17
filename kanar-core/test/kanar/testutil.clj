@@ -2,6 +2,7 @@
   (:require
     [kanar.core.util :as ku]
     [kanar.core :as kc]
+    [kanar.core.cas :as kcc]
     [kanar.core.saml :as kcs]
     [kanar.core.ticket :as kt]
     [ring.util.response :refer [redirect]]
@@ -58,24 +59,15 @@
   (reset! *treg-atom* {})
   (reset! *sso-logouts* []))
 
-(defn render-login-view [& {:as args}]
-  (pr-str {:view :login :args (dissoc args :app-state)}))
+
+(defn view-testfn [type req]
+  (assoc req :test/view-type type))
 
 
-(defn render-message-view [status msg & {:as args}]
-  (pr-str {:view :message :status status :msg msg :args (dissoc args :app-state)}))
-
-
-(defn authenticate [princ {{username :username password :password dom :dom} :params :as req}]
-  "Basic authentication function.
-  princ - principal data (or null if still not authenticated)
-  req - HTTP request object (with form params)
-  "
-  (if princ
-    princ
-    (if (= username password)
-      {:id username :attributes {} :dom dom}
-      (ku/login-failed "Invalid username or password."))))
+(defn auth-testfn [{{:keys [username password]} :credentials :as req}]
+  (if (= username password)
+    (assoc req :principal {:id username})
+    (assoc-in req [:view-params :message ] "Invalid username or password.")))
 
 
 (defn select-kanar-domain [{{:keys [dom]} :params}]
@@ -89,43 +81,41 @@
 
 
 ; TODO przenieść konsturkcję tego do dedykowanego config namespace;
-(defn kanar-routes-new [app-state]
-  (routes
-    (ANY "/login" req                                       ; TODO ANY -> POST/GET
-         (kc/login-handler (:login-flow @app-state) @app-state req))
-    (ANY "/samlLogin" req
-         (kcs/saml2-login-handler (:login-flow @app-state) @app-state req))
-    (ANY "/logout" req                                      ; TODO ograniczyć do GET
-         (kc/logout-handler @app-state req))
-    (ANY "/validate" req                                    ; TODO ograniczyć do POST
-         (kc/cas10-validate-handler @app-state req))
-    (ANY "/serviceValidate" req                             ; TODO ograniczyć do POST
-         (kc/cas20-validate-handler @app-state req #"ST-.*"))
-    (ANY "/proxyValidate" req                               ; TODO ograniczyć do POST
-         (kc/cas20-validate-handler @app-state req #"(ST|PT)-.*"))
-    (ANY "/proxy" req                                       ; TODO ograniczyć do POST;
-         (kc/proxy-handler @app-state req))
-    (ANY "/samlValidate" req
-         (kc/saml-validate-handler @app-state req))
-    (ANY "/*" []
-         (redirect "login"))))
+(defn kanar-routes-new [{:keys [ticket-registry view-fn services auth-fn svc-access-fn]}]
+  (let [login-fn (->
+                   kc/service-redirect
+                   (kc/service-lookup-wfn ticket-registry view-fn services svc-access-fn)
+                   (kc/login-flow-wfn ticket-registry (kc/form-login-flow-wfn auth-fn view-fn))
+                   (kc/tgt-lookup-wfn ticket-registry)
+                   (kc/sso-request-parse-wfn kcc/parse-cas-req))
+        validate-fn (kcc/cas10-validate-handler ticket-registry)
+        validate2-fn (kcc/cas20-validate-handler ticket-registry #"ST-.*")
+        validate-pfn (kcc/cas20-validate-handler ticket-registry #"(ST|PT)-.*")
+        logout-fn (kcc/logout-handler ticket-registry view-fn)
+        proxy-fn (kcc/proxy-handler ticket-registry)
+        saml-validate-fn (kcc/saml-validate-handler ticket-registry)]
+    (routes
+      (ANY "/login" req (login-fn req))
+      (ANY "/logout" req (logout-fn req))
+      (ANY "/validate" req (validate-fn req))
+      (ANY "/serviceValidate" req (validate2-fn req))
+      (ANY "/proxyValidate" req (validate-pfn req))
+      (ANY "/proxy" req (proxy-fn req))
+      (ANY "/samlValidate" req (saml-validate-fn req))
+      (ANY "/*" [] (redirect "login")))))
 
 
 (defn basic-test-fixture [f]
   (reset-fixture)
   (binding [kanar (ku/wrap-set-param
                     (kanar-routes-new
-                      (atom
-                        {:ticket-seq          (atom 0)
-                         :conf                {:server-id "SVR1"}
-                         :services            *test-services*
-                         :ticket-registry     (kt/atom-ticket-registry *treg-atom*)
-                         :render-message-view render-message-view
-                         :audit-fn            test-audit-fn
-                         :saml2-key-pair        *dsa-key-pair*
-                         :login-flow          (kc/form-login-flow authenticate render-login-view)
-                         :svc-auth-fn (fn [_ _ svc _] (not (:verboten svc)))
-                         }))
+                      {:services            *test-services*
+                       :ticket-registry     (kt/atom-ticket-registry *treg-atom*)
+                       :view-fn             view-testfn
+                       :svc-access-fn       (fn [req] (not (:verboten (:service req))))
+                       :auth-fn             auth-testfn
+                       :saml2-key-pair      *dsa-key-pair*
+                       })
                     :dom select-kanar-domain)]
     (with-redefs
       [kc/service-logout (fn [_ _] nil)]

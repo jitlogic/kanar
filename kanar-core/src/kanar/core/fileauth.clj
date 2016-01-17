@@ -46,6 +46,21 @@
       (ku/merge-principals (or princ {}) (dissoc urec :password)))))
 
 
+
+(defn file-auth-wfn
+  ([user-data]
+   (file-auth-wfn identity user-data))
+  ([f user-data]
+   (fn [{{:keys [username password]} :credentials :as req}]
+     (let [princ (user-data username)]
+       (log/trace "Principal from user data: " princ)
+       (if (or (nil? princ) (not (check-password (:password princ) password)))
+         (assoc-in (dissoc req :principal) [:view-params :message] "Invalid username or password")
+         (f (assoc req :principal (ku/merge-principals (:principal req {}) (dissoc princ :password))))
+         )))))
+
+
+
 (defn file-auth-load-file [^String path]
   (let [users (read-string (slurp path))]
     ; TODO sanity check here
