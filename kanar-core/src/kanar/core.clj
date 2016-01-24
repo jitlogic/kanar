@@ -4,36 +4,93 @@
     [ring.util.response :refer [redirect]]
     [ring.util.request :refer [body-string]]
     [kanar.core.util :as ku]
-    [kanar.core.protocol :as kp]
     [kanar.core.ticket :as kt]
     [slingshot.slingshot :refer [try+ throw+]]
     [clj-http.client :as http]
-    [schema.core :as s])
+    [schema.core :as s]
+    [clojure.string :as cs])
   (:import (java.util.concurrent ExecutorService Executors)))
+
+
+(def http-request-schema
+  "Schema for base (filtered) HTTP request."
+  {:uri s/Str
+   :headers s/Any
+   :cookies s/Any})
 
 
 (def sso-principal-schema
   "Defines SSO principal"
-  {:id s/Str                                                ; principal ID
+  {:id         s/Str                                        ; principal ID
    :attributes s/Any                                        ; Principal attributes
-   :dn s/Str                                                ; DN (for LDAP principals)
-   :dom s/Keyword                                           ; Authentication domain (optional - for multidomain setups)
+   :dn         s/Str                                        ; DN (for LDAP principals)
+   :domain     (s/maybe s/Keyword)                          ; Authentication domain (optional - for multidomain setups)
    })
+
+
+(def sso-service-schema
+  {:id          s/Keyword                                   ; Service ID
+   :url         (s/enum s/Regex s/Str)                      ; Service URL mask
+   :app-urls    (s/maybe [s/Str])                           ; Direct URLs to application instances (for backwards communication)
+   :id-template (s/maybe s/Str)                             ;
+   :allow-roles (s/maybe [s/Str])
+   :deny-roles  (s/maybe [s/Str])
+   :domains     (s/maybe [s/Keyword])
+   :http-params (s/maybe s/Any)                             ; Parameters for HTTP client
+   })
+
+
+(def tgt-ticket-schema
+  {:type :tgt                                               ; Ticket type = TGT
+   :tid s/Str                                               ; Ticket ID
+   :princ sso-principal-schema                              ; Ticket owner (SSO principal)
+   :sts s/Any                                               ; Associated session tickets
+   :ctime s/Num                                             ; Ticket creation time
+   :timeout s/Num                                           ; Time instant TGT will be discarded
+   })
+
+
+(def svt-ticket-schema
+  {:type :svt                                               ; Ticket type = SVT
+   :tid s/Str                                               ; Ticket ID
+   :url s/Str                                               ;
+   :expended s/Bool
+   :service sso-service-schema
+   :tgt s/Str
+   :ctime s/Num
+   :timeout s/Num
+   })
+
+
+(def pgt-ticket-schema
+  {:type :pgt
+   :tid s/Str
+   :iou s/Str
+   :url s/Str
+   :service sso-service-schema
+   :tgt s/Str
+   })
+
 
 
 (def sso-request-schema
-  "Schema for parsed SSO request data. This is extention to standard http request data."
-  {:protocol (s/enum :cas :saml :oauth2)                    ; SSO protocol used
-   :service-url s/Str                                       ; URL to redirect back to service
-   :credentials s/Any                                       ; Login credentials
-   :principal sso-principal-schema                          ; Logged in principal
-   :view-params s/Any                                       ; Parameters for rendered views
-   :hidden-params s/Any                                     ; Hidden form parameters in rendered views
-   :service-params s/Any                                    ; SSO parameters passed
-   :tgt s/Any                                               ; Ticket Granting Ticket
-   :svt s/Any                                               ; Service Granting Ticket
-   :service s/Any                                           ; Service
-   })
+  "Schema for parsed and processed SSO request data. This is extention to standard http request data."
+  (merge
+    http-request-schema
+    {:protocol       (s/enum :cas :saml :oauth2)            ; SSO protocol used
+     :service-url    s/Str                                  ; URL to redirect back to service
+     :credentials    s/Any                                  ; Login credentials
+     :principal      sso-principal-schema                   ; Logged in principal
+     :view-params    s/Any                                  ; Parameters for rendered views
+     :hidden-params  s/Any                                  ; Hidden form parameters in rendered views
+     :service-params s/Any                                  ; SSO parameters passed
+     :login          (s/enum :none :page)                   ; Login page display mode
+     :prompt         (s/enum :none :consent)                ; SSO
+     :sesctl         (s/enum :none :renew :login)           ; Whenever session should be renewed (user requthenticated)
+     :tgt            tgt-ticket-schema                      ; Ticket Granting Ticket
+     :svt            s/Any                                  ; Service Granting Ticket
+     :service        s/Any                                  ; Service
+     }))
 
 
 (defn login-failed [req view-fn msg]
@@ -45,6 +102,14 @@
 (defn message-screen [{:keys [tgt] :as req} view-fn status msg]
   {:status  200
    :body    (view-fn :message (assoc req :view-params (merge (:view-params req) {:status status :message msg})))
+   :headers {"Content-type" "text/html; charset=utf-8"}
+   :cookies (if tgt {"CASTGC" (ku/secure-cookie (:tid tgt))} {})
+   })
+
+
+(defn consent-screen [{:keys [tgt] :as req} view-fn msg options]
+  {:status 200
+   :body (view-fn :consent (assoc req :view-params (merge (:view-params req) {:message msg, :options options})))
    :headers {"Content-type" "text/html; charset=utf-8"}
    :cookies (if tgt {"CASTGC" (ku/secure-cookie (:tid tgt))} {})
    })
@@ -68,18 +133,24 @@
 
 (defn sso-request-parse-wfn [f & pfns]
   "Parses request parameters and detects SSO protocol (eg. CAS, OAuth20 etc.)."
-  (fn [r]
-    (let [sso-reqs (for [pfn pfns :let [v (pfn r)]] v)
+  (fn [{{:keys [gateway renew warn]} :params :as req}]
+    (let [sso-reqs (for [pfn pfns :let [v (pfn req)]] v)
           sso-req (first sso-reqs)]
-      (f (merge r (or sso-req {:protocol :none}))))))
+      (f (merge req (or sso-req
+                        {:protocol :none,
+                         :login (if gateway :none :page),
+                         :prompt (if warn :consent :none),
+                         :sesctl (if renew :renew :none)} ))))))
 
 
 (defn tgt-lookup-wfn [f ticket-registry]
   "WFN: Looks up for TGC ticket."
-  (fn [{{{CASTGC :value} "CASTGC"} :cookies {:keys [gateway]} :params :as req}]
+  (fn [{{{CASTGC :value} "CASTGC"} :cookies :keys [login sesctl] :as req}]
+    (if (= :renew sesctl)
+      (kt/delete-ticket ticket-registry CASTGC true))
     (if-let [tgt (and CASTGC (kt/get-ticket ticket-registry CASTGC))]
       (f (assoc req :tgt tgt))
-      (if gateway
+      (if (= login :none)
         {:status  302
          :body    "Redirecting to service ..."
          :headers {"Location" (:service-url req), "Content-type" "text/plain; charset=utf-8"}}
@@ -92,8 +163,9 @@
     (if (:tgt req)
       (f req)
       (let [r (lf req)]
-        (if (:principal r)
-          (f (assoc r :tgt (kt/grant-tgt-ticket ticket-registry (:principal r))))
+        (if-let [princ (:principal r)]
+          (let [tkt {:type :tgt, :tid (kt/new-tid "TGC"), :princ princ, :timeout kt/TGT-TIMEOUT}]
+            (f (assoc r :tgt (kt/new-object ticket-registry tkt))))
           r)))))
 
 
@@ -104,13 +176,26 @@
       (login-failed req view-fn ""))))
 
 
+(defn prompt-consent-screen-wfn [f view-fn]
+  (fn [{:keys [prompt service uri hidden-params] :as req}]
+    (if (= prompt :consent)
+      (consent-screen
+        req view-fn (str "Redirect to " (:description service) " ?")
+        [["Yes" (str uri "?" (cs/join "&" (for [[k v] hidden-params] (str (name k) "&" (ku/url-enc v)))))]
+         ["No" (:url service)]])
+      (f req))))
+
+
 (defn service-lookup-wfn [f ticket-registry view-fn services svc-access-fn]
   "Performs service lookup (or redirect)."
   (fn [{:keys [service-url tgt] :as req}]
     (if-let [svc (service-lookup services service-url)]
       (let [r (assoc req :service svc)]
         (if (svc-access-fn r)
-          (f (assoc r :svt (kt/grant-st-ticket ticket-registry (:service-url r) svc (:tid tgt))))
+          (let [sid (kt/new-tid "ST"), svc-url (:service-url r)
+                tkt {:type :svt :tid sid, :url svc-url :service svc :tgt (:tid tgt), :expended false}]
+            (kt/ref-ticket ticket-registry (:tid tgt) sid)
+            (f (assoc r :svt (kt/new-object ticket-registry tkt))))
           (message-screen r view-fn :error "Service not allowed.")))
       (if service-url
         (message-screen req view-fn :error "Invalid service URL.")
@@ -125,6 +210,14 @@
    :body "Redirecting to application ..."
    :headers {"Location" (:service-url req)}
    :cookies {"CASTGC" (ku/secure-cookie (:tid (:tgt req) ""))}})
+
+
+(defmulti error-response "Renders error response from SSO. Depending on protocol it might be redirect or error screen." :protocol)
+
+
+(defmethod error-response :default [{{:keys [error error_description]} :error :as req}]
+  {:status 200
+   :body   (str "Error occured: " error ": " error_description)})
 
 
 (def ^:private ^ExecutorService logout-pool (Executors/newFixedThreadPool 16))
@@ -145,7 +238,7 @@
                                (let [res (http/post
                                            url
                                            (into (:http-params service {})
-                                                 {:form-params     {:logoutRequest (kp/cas-logout-msg tid)}
+                                                 {          ; TODO :form-params     {:logoutRequest (cas-logout-msg tid)}
                                                   :force-redirects false
                                                   :socket-timeout  5000
                                                   :conn-timeout    5000}))]
@@ -157,11 +250,9 @@
                                )))))
 
 
-
-
-
-
-
-
-
+(defmacro --> [& args]
+  "Useful macro for defining chains of wrapper functions.
+  This is equivalent of `->` with reversed argument order."
+  (let [ra# (reverse args)]
+    `(-> ~@ra#)))
 

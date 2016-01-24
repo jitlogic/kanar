@@ -8,12 +8,8 @@
            (javax.xml.parsers DocumentBuilderFactory)
            (com.sun.org.apache.xml.internal.serialize OutputFormat XMLSerializer)
            (org.w3c.dom Document)
-           (java.io StringWriter FileInputStream)
-           (javax.xml.crypto.dsig XMLSignatureFactory DigestMethod Transform CanonicalizationMethod SignatureMethod XMLSignature)
-           (javax.xml.crypto.dsig.spec TransformParameterSpec C14NMethodParameterSpec)
-           (java.security KeyPair PublicKey KeyStore)
-           (javax.xml.crypto.dsig.dom DOMSignContext DOMValidateContext)
-           (javax.xml.crypto KeySelector))
+           (java.io StringWriter)
+           (net.minidev.json JSONObject JSONArray))
   (:require
     [slingshot.slingshot :refer [try+ throw+]]
     [taoensso.timbre :as log]
@@ -72,45 +68,6 @@
       (xml/emit-event event writer))
     (.getNode rslt)))
 
-
-(defn xml-sign [^Document doc ^KeyPair kp]
-  (let [sc (DOMSignContext. (.getPrivate kp) (.getDocumentElement doc))
-        xf (XMLSignatureFactory/getInstance "DOM")
-        dm (.newDigestMethod xf DigestMethod/SHA1 nil)
-        ^TransformParameterSpec tp nil
-        tr (.newTransform xf Transform/ENVELOPED tp)
-        rf (.newReference xf "" dm (Collections/singletonList tr) nil nil)
-        ^C14NMethodParameterSpec mp nil
-        cm (.newCanonicalizationMethod xf CanonicalizationMethod/INCLUSIVE mp)
-        sm (.newSignatureMethod xf SignatureMethod/RSA_SHA1 nil)
-        si (.newSignedInfo xf cm sm (Collections/singletonList rf))
-        kf (.getKeyInfoFactory xf)
-        kv (.newKeyValue kf (.getPublic kp))
-        ki (.newKeyInfo kf (Collections/singletonList kv))
-        xs (.newXMLSignature xf si ki)]
-    (.sign xs sc)
-    doc))
-
-(defn xml-validate [^Document doc, ^PublicKey k]
-  (let [nl (.getElementsByTagNameNS doc XMLSignature/XMLNS "Signature")]
-    (when (= 0 (.getLength nl))
-      (throw+ {:type :xml-validation :msg "Cannot find signature element"}))
-    (let [vc (DOMValidateContext. (KeySelector/singletonKeySelector k) (.item nl 0))
-          xf (XMLSignatureFactory/getInstance "DOM")
-          sg (.unmarshalXMLSignature xf vc)
-          cv (.validate sg vc)]
-      (when-not (.validate sg vc)
-        (throw+ {:type :xml-validation :msg "Cannot validate signature."})))))
-
-
-(defn read-key-pair [{:keys [keystore keypass alias] :as sconf}]
-  (log/info "Reading key store for SAML conf: " sconf)
-  (with-open [f (FileInputStream. ^String keystore)]
-    (let [ks (KeyStore/getInstance (KeyStore/getDefaultType))]
-      (.load ks f (.toCharArray keypass))
-      (let [prv (.getKey ks alias (.toCharArray keypass))
-            pub (.getPublicKey (.getCertificate ks alias))]
-        (KeyPair. pub prv)))))
 
 
 (defn dom-to-str [node]
@@ -211,9 +168,8 @@
   (merge p1 p2 {:attributes (merge attr1 attr2)}))
 
 
-(defn get-svt-attrs [{{attrs :attrs} :service :as svt}]
-  (let [attrv (get-in svt [:tgt :princ :attributes])]
-    (if (vector? attrs) (select-keys attrv attrs) attrv)))
+(defn get-svt-attrs [{:keys [attributes] :as princ} {{attrs :attrs} :service :as svt}]
+  (if (vector? attrs) (select-keys attributes attrs) attributes))
 
 (defn b64 [v]
   (DatatypeConverter/printBase64Binary (.getBytes (str v))))
@@ -223,3 +179,27 @@
 (defn oneliner [s]
   (cs/join
     (for [c s :when (not (contains? SKIP_CHARS c))] c)))
+
+
+(defn to-json-object [x]
+  "Converts Clojure data structure to JSONObject."
+  (cond
+    (map? x)
+    (let [o (JSONObject.)]
+      (doseq [[k v] x] (.put o (if (keyword? k) (name k) (str k)) (to-json-object v)))
+      o)
+    (or (vector? x) (seq? x))
+    (let [a (JSONArray.)]
+      (doseq [v x] (.add a v))
+      a)
+    (or (string? x) (number? x)) x))
+
+
+(defn from-json-object [x]
+  "Converts JSONObject to Clojure data structure."
+  (cond
+    (instance? JSONObject x) (into {} (for [[k v] x] { (keyword k) (from-json-object v)}))
+    (instance? JSONArray x)  (vec (for [v x] (from-json-object v)))
+    (or (string? x) (number? x)) x))
+
+

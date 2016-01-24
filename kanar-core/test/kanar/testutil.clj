@@ -46,6 +46,10 @@
     (.generateKeyPair kg)))
 
 
+(defn matches [re s]
+  (and s (re-matches re s)))
+
+
 ; Generic end-to-end test fixture
 
 (defn test-audit-fn [_ _ _ _ _])
@@ -82,12 +86,13 @@
 
 ; TODO przenieść konsturkcję tego do dedykowanego config namespace;
 (defn kanar-routes-new [{:keys [ticket-registry view-fn services auth-fn svc-access-fn]}]
-  (let [login-fn (->
-                   kc/service-redirect
-                   (kc/service-lookup-wfn ticket-registry view-fn services svc-access-fn)
-                   (kc/login-flow-wfn ticket-registry (kc/form-login-flow-wfn auth-fn view-fn))
+  (let [login-fn (kc/-->
+                   (kc/sso-request-parse-wfn kcc/parse-cas-req)
                    (kc/tgt-lookup-wfn ticket-registry)
-                   (kc/sso-request-parse-wfn kcc/parse-cas-req))
+                   (kc/login-flow-wfn ticket-registry (kc/form-login-flow-wfn auth-fn view-fn))
+                   (kc/prompt-consent-screen-wfn view-fn)
+                   (kc/service-lookup-wfn ticket-registry view-fn services svc-access-fn)
+                   kc/service-redirect)
         validate-fn (kcc/cas10-validate-handler ticket-registry)
         validate2-fn (kcc/cas20-validate-handler ticket-registry #"ST-.*")
         validate-pfn (kcc/cas20-validate-handler ticket-registry #"(ST|PT)-.*")
@@ -110,7 +115,7 @@
   (binding [kanar (ku/wrap-set-param
                     (kanar-routes-new
                       {:services            *test-services*
-                       :ticket-registry     (kt/atom-ticket-registry *treg-atom*)
+                       :ticket-registry     (kt/atom-ticket-store *treg-atom*)
                        :view-fn             view-testfn
                        :svc-access-fn       (fn [req] (not (:verboten (:service req))))
                        :auth-fn             auth-testfn

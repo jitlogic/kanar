@@ -2,6 +2,7 @@
   (:require
     [kanar.core :as kc]
     [kanar.core.util :as ku]
+    [kanar.core.crypto :as kcc]
     [clojure.data.xml :as xml]
     [kanar.core.ticket :as kt]
     [slingshot.slingshot :refer [try+ throw+]]
@@ -90,7 +91,7 @@
   (-> svt
       saml2-raw-success-resp
       ku/emit-dom
-      (ku/xml-sign kp)
+      (kcc/xml-sign kp)
       ku/dom-to-str))
 
 
@@ -177,14 +178,14 @@
                :ok "Login succesful."
                :url (str "saml2login?SAMLRequest=" (ku/url-enc (:SAMLRequest params)) "&RelayState=" (ku/url-enc (:RelayState params)))
                :dom (:dom tgt)) :tgt tgt, :req req}
-      :else                                                 ; case 4: no 'warn' parameter present
-      (let [svt (kt/grant-st-ticket ticket-registry svc-url svc (:tid tgt) :saml-req saml-req)
-            sr (saml2-param-success-resp svt saml2-key-pair)]
-        (kc/audit app-state req tgt svc :SERVICE-TICKET-GRANTED)
-        {:status  302
-         :body    (render-saml-redirect-form (:url svt) {:SAMLResponse sr :RelayState (:RelayState params)})
-         :headers {"Content-Type" "text/html; charset=utf-8"}
-         :cookies {"CASTGC" (ku/secure-cookie (:tid tgt))}})
+      ;:else                                                 ; case 4: no 'warn' parameter present
+      ;(let [svt (kt/grant-st-ticket ticket-registry svc-url svc (:tid tgt) :saml-req saml-req)
+      ;      sr (saml2-param-success-resp svt saml2-key-pair)]
+      ;  (kc/audit app-state req tgt svc :SERVICE-TICKET-GRANTED)
+      ;  {:status  302
+      ;   :body    (render-saml-redirect-form (:url svt) {:SAMLResponse sr :RelayState (:RelayState params)})
+      ;   :headers {"Content-Type" "text/html; charset=utf-8"}
+      ;   :cookies {"CASTGC" (ku/secure-cookie (:tid tgt))}})
       )))
 
 
@@ -201,10 +202,12 @@
         (let [tgt (kt/get-ticket ticket-registry CASTGC)]
           (if tgt
             (kc/audit app-state req tgt nil :TGT-DESTROYED)
-            (kt/clear-session ticket-registry CASTGC)))
+            (kt/delete-ticket ticket-registry CASTGC)
+            ))
         (try+
           (let [princ (login-flow-fn app-state req)
-                tgt (kt/grant-tgt-ticket ticket-registry princ)]
+                tgt nil                                         ;(kt/grant-tgt-ticket ticket-registry princ)
+                ]
             (kc/audit app-state req tgt nil :TGT-GRANTED)
             (saml2-service-redirect app-state req saml-req tgt))
           (catch [:type :login-cont] {:keys [resp]} resp)

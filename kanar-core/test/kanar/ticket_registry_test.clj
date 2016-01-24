@@ -29,23 +29,23 @@
 
 (use-fixtures :each ticket-registry-test-fixture)
 
-(defn  grant-some-session-ticket-and-list-them [tr]
-  (let [tgt1 (kt/grant-tgt-ticket tr {:id "a"})
-        tgt2 (kt/grant-tgt-ticket tr {:id "b"})
-        _ (kt/grant-st-ticket tr "url11" {} (:tid tgt1))
-        _ (kt/grant-st-ticket tr "url12" {} (:tid tgt1))
-        _ (kt/grant-st-ticket tr "url21" {} (:tid tgt2))]
-    (is (= 2 (count (kt/session-tickets tr (:tid tgt1)))))
-    (is (= 1 (count (kt/session-tickets tr (:tid tgt2)))))
-    ))
+;(defn  grant-some-session-ticket-and-list-them [tr]
+;  (let [tgt1 (kt/grant-tgt-ticket tr {:id "a"})
+;        tgt2 (kt/grant-tgt-ticket tr {:id "b"})
+;        _ (kt/grant-st-ticket tr "url11" {} (:tid tgt1))
+;        _ (kt/grant-st-ticket tr "url12" {} (:tid tgt1))
+;        _ (kt/grant-st-ticket tr "url21" {} (:tid tgt2))]
+;    (is (= 2 (count (kt/session-tickets tr (:tid tgt1)))))
+;    (is (= 1 (count (kt/session-tickets tr (:tid tgt2)))))
+;    ))
 
 
-(deftest grant-session-ticket-and-list-atr
-  (grant-some-session-ticket-and-list-them *atr*))
-
-
-(deftest grant-session-ticket-and-list-mtr
-  (grant-some-session-ticket-and-list-them *mtr*))
+;(deftest grant-session-ticket-and-list-atr
+;  (grant-some-session-ticket-and-list-them *atr*))
+;
+;
+;(deftest grant-session-ticket-and-list-mtr
+;  (grant-some-session-ticket-and-list-them *mtr*))
 
 
 ;(deftest grant-tgt-and-check-if-atime-is-updated

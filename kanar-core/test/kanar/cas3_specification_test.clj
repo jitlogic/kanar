@@ -5,7 +5,7 @@
     [compojure.route :refer [not-found]]
     [ring.util.response :refer [redirect]]
     [kanar.core :as kc]
-    [kanar.core.protocol :as kp]
+    [kanar.core.cas :as kcc]
     [kanar.testutil :refer :all]
     [slingshot.slingshot :refer [try+ throw+]]
     ))
@@ -52,8 +52,7 @@
   (testing "Log in with correct password and CAS service redirection."
     (let [r (kanar { :uri "/login" :params {:username "test" :password "test" :lt "true" :service "https://my-app.com"}})]
       (is (= 302 (:status r)) "Should make redirect.")
-      (is (get-rdr r))
-      (is (re-matches #"https://my-app.com.ticket=ST-.*-XXX", (get-rdr r)))
+      (is (matches #"https://my-app.com.ticket=ST-.*-XXX", (get-rdr r)))
       (is (= 2 (count @*treg-atom*)) "Should create SSO ticket and service ticket."))))
 
 
@@ -62,18 +61,17 @@
     (let [r (kanar { :uri "/login" :params {:username "test" :password "test" :lt "true" :TARGET "https://my-app.com"}})]
       (is (= 302 (:status r)) "Should make redirect.")
       (is (get-rdr r))
-      (is (re-matches #"https://my-app.com.SAMLart=ST-.*-XXX", (get-rdr r)))
+      (is (matches #"https://my-app.com.SAMLart=ST-.*-XXX", (get-rdr r)))
       (is (= 2 (count @*treg-atom*)) "Should create SSO ticket and service ticket."))))
 
 
 ; TODO zaimplementować warning screen
-;(deftest login-with-redirection-and-warn-screen-test
-;  (testing "Log in with service redirection and warning screen enabled."
-;    (let [r (kanar { :uri "/login" :params {:username "test" :password "test" :service "https://my-app.com" :warn nil}})
-;          v (read-string (:body r))]
-;      (is (= 200 (:status r)) "Should not make redirect.")
-;      (is  (re-matches #"login.service=https%3A%2F%2Fmy-app.com.*", (:url (:args v)))) ; TODO tutaj ticket nie jest podawany
-;      (is (= 1 (count @*treg-atom*)) "Should create only ticket granting ticket."))))
+(deftest login-with-redirection-and-warn-screen-test
+  (testing "Log in with service redirection and warning screen enabled."
+    (let [r (kanar { :uri "/login" :params {:username "test" :password "test" :service "https://my-app.com" :warn "1"}})]
+      (is (= 200 (:status r)) "Should not make redirect.")
+      (is (= "/login?service&https%3A%2F%2Fmy-app.com") (-> r :body :options first first))
+      (is (= 1 (count @*treg-atom*)) "Should create only ticket granting ticket."))))
 
 
 (deftest login-check-if-login-form-passes-sso-parameters
@@ -87,31 +85,34 @@
   (testing "Try opening login form without credentials and with gateway parameter"
     (let [r (kanar { :uri "/login" :params {:service "https://my-app.com" :gateway 1}})]
       (is (= 302 (:status r)))
-      (is (re-matches #"https://my-app.com", (get-rdr r))))))
+      (is (matches #"https://my-app.com", (get-rdr r))))))
 
 
-; TODO opcje renew i gateway
-;(deftest login-with-renew-option-test
-;  (testing "Log in once and then use renew option and check if login form appears."
-;    (let [r (kanar {:uri "/login" :params {:username "test" :password "test"}})]
-;      (is (= 1 (count @*treg-atom*)) "New ticket should appear.")
-;      (let [l (kanar {:uri "/login" :params {:renew nil}
-;                      :cookies {"CASTGC" {:value (get-tgc r)}}})]
-;        (is (= 200 (:status l)) "Should ask for login once again")
-;        (is (= 0 (count @*treg-atom*)) "Old ticket should be removed."))))
-;
-;  (testing "Log in once, then use renew to log in for the second time."
-;    (let [r (kanar {:uri "/login" :params {:username "t" :password "t" :renew nil}})]
-;      (is (= 1 (count @*treg-atom*)) "New ticket should appear.")
-;      (let [l (kanar {:uri "/login" :params {:username "t" :password "t" :renew nil}
-;                      :cookies {"CASTGC" {:value (get-tgc r)}}})]
-;        (is (= 1 (count @*treg-atom*)) "Only new ticket exist (old one removed).")
-;        (is (not= (get-tgc r) (get-tgc l))))))
-;
-;  (testing "Log in once, then use both renew and gateway options."
-;    (let [r (kanar {:uri "/login" :params {:service "https://my-app.com" :renew nil :gateway nil}})]
-;      (is (= 302 (:status r)) "Should redirect straight to application (no ticket).")
-;      (is (= "https://my-app.com" (get-rdr r)) "Should immediately redirect to application."))))
+(deftest login-with-renew-option-test
+  (testing "Log in once and then use renew option and check if login form appears."
+    (let [r (kanar {:uri "/login" :params {:username "test" :password "test"}})]
+      (is (= 1 (count @*treg-atom*)) "New ticket should appear.")
+      (let [l (kanar {:uri "/login" :params {:renew 1}
+                      :cookies {"CASTGC" {:value (get-tgc r)}}})]
+        (is (= 200 (:status l)) "Should ask for login once again")
+        (is (= 0 (count @*treg-atom*)) "Old ticket should be removed.")))))
+
+
+(deftest relogin-with-renew-option-test
+  (testing "Log in once, then use renew to log in for the second time."
+    (let [r (kanar {:uri "/login" :params {:username "t" :password "t" :renew 1}})]
+      (is (= 1 (count @*treg-atom*)) "New ticket should appear.")
+      (let [l (kanar {:uri "/login" :params {:username "t" :password "t" :renew 1}
+                      :cookies {"CASTGC" {:value (get-tgc r)}}})]
+        (is (= 1 (count @*treg-atom*)) "Only new ticket exist (old one removed).")
+        (is (not= (get-tgc r) (get-tgc l)))))))
+
+
+(deftest login-with-renew-and-gateway-options-test
+  (testing "Log in once, then use both renew and gateway options."
+    (let [r (kanar {:uri "/login" :params {:service "https://my-app.com" :renew 1 :gateway 1}})]
+      (is (= 302 (:status r)) "Should redirect straight to application (no ticket).")
+      (is (= "https://my-app.com" (get-rdr r)) "Should immediately redirect to application."))))
 
 
 (deftest try-login-to-forbidden-service-test
@@ -122,14 +123,12 @@
       )))
 
 
-
-
 (deftest basic-login-redirect-logout-check-ticket-cache-test
   (testing "Log in with correct password and CAS service redirection, log out and check if all tickets are remoted."
     (let [r (kanar { :uri "/login" :params {:username "test" :password "test" :lt "true" :service "https://my-app.com"}})]
       (is (= 302 (:status r)) "Should make redirect.")
       (is (get-rdr r))
-      (is (re-matches #"https://my-app.com.ticket=ST-.*-XXX", (get-rdr r)))
+      (is (matches #"https://my-app.com.ticket=ST-.*-XXX", (get-rdr r)))
       (is (= 2 (count @*treg-atom*)) "Should create SSO ticket and service ticket.")
       (kanar {:uri "/logout" :cookies {"CASTGC" {:value (get-tgc r)}}})
       (is (= 0 (count @*treg-atom*))))))
@@ -166,11 +165,11 @@
         (is tid "Ticket ID should be extracted here.")
         (is (= 2 (count @*treg-atom*)) "Should create SSO ticket and service ticket.")
         (let [v (kanar { :uri "/serviceValidate" :params {:service "https://my-app" :ticket "XXX"}})]
-          (is (re-matches #".*INVALID_TICKET_SPEC.*" (:body v))))
+          (is (matches #".*INVALID_TICKET_SPEC.*" (:body v))))
         (let [v (kanar { :uri "/serviceValidate" :params {:service "https://my-app" :ticket tid}})]
-          (is (re-matches #".*cas:user>test</cas:user.*" (:body v))))
+          (is (matches #".*cas:user>test</cas:user.*" (:body v))))
         (let [v (kanar { :uri "/serviceValidate" :params {:service "https://my-app" :ticket tid}})]
-          (is (re-matches #".*INVALID_TICKET_SPEC.*" (:body v))))))))
+          (is (matches #".*INVALID_TICKET_SPEC.*" (:body v))))))))
 
 
 (deftest basic-saml-validate-test
@@ -181,13 +180,13 @@
         (is sid "Ticket ID should be extracted here.")
         (is (= 2 (count @*treg-atom*)) "Should create SSO ticket and service ticket.")
         (let [v (kanar {:uri "/samlValidate" :params {:TARGET "https://my-app" }
-                        :body (kp/saml-validate-request "xxx")})]
+                        :body (kcc/saml-validate-request "xxx")})]
           (is (= "Error executing SAML validation.\n" (:body v))))
         (let [v (kanar {:uri "/samlValidate" :params {:TARGET "https://my-app" }
-                        :body (kp/saml-validate-request sid)})]
-          (is (re-matches #".*saml1:NameIdentifier.test..saml1:NameIdentifier.*" (:body v))))
+                        :body (kcc/saml-validate-request sid)})]
+          (is (matches #".*saml1:NameIdentifier.test..saml1:NameIdentifier.*" (:body v))))
         (let [v (kanar {:uri "/samlValidate" :params {:TARGET "https://my-app"}
-                        :body (kp/saml-validate-request sid)})]
+                        :body (kcc/saml-validate-request sid)})]
           (is (= "Error executing SAML validation.\n" (:body v))))))))
 
 
