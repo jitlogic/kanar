@@ -25,16 +25,6 @@
       (= pwd-hash password)))
 
 
-(defn file-auth-fn [fdb-state]
-  "File-based user authenticator. "
-  (fn [_ {{username :username password :password} :params}]
-    (let [princ (get @fdb-state username)]
-      (log/trace "Principal found: " princ)
-      (if (or (nil? princ) (not (check-password (:password princ) password)))
-        (ku/login-failed "Invalid username or password."))
-      (ku/merge-principals (or princ {}) (dissoc princ :password)))))
-
-
 ; TODO enhance principal attributes instead of overwriting it (with option to switch between overwrite/enhance modes);
 (defn file-lookup-fn [fdb-state & {:keys [optional]}]
   (fn [{:keys [id] :as princ} _]
@@ -44,7 +34,6 @@
           princ
           (ku/login-failed "Invalid username or password.")))
       (ku/merge-principals (or princ {}) (dissoc urec :password)))))
-
 
 
 (defn file-auth-wfn
@@ -59,6 +48,18 @@
          (f (assoc req :principal (ku/merge-principals (:principal req {}) (dissoc princ :password))))
          )))))
 
+
+(defn file-lookup-wfn
+  ([user-data & {:keys [optional]}]
+    (file-lookup-wfn identity user-data :optional optional))
+  ([f user-data & {:keys [optional]}]
+    (fn [{{:keys [id]} :principal :as req}]
+      (let [princ (user-data id)]
+        (cond
+          princ (f (assoc req :principal (ku/merge-principals (:principal req {}) (dissoc princ :password))))
+          optional (f req)
+          :else (assoc-in (dissoc req :principal) [:view-params :message] "Invalid username or password")))
+        )))
 
 
 (defn file-auth-load-file [^String path]

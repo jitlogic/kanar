@@ -4,7 +4,8 @@
     [clj-ldap.client :as ldap]
     [slingshot.slingshot :refer [try+ throw+]]
     [kanar.core.util :as ku]
-    [taoensso.timbre :as log])
+    [taoensso.timbre :as log]
+    [kanar.core :as kc])
   (:import (com.unboundid.ldap.sdk LDAPConnectionOptions)
            (java.text SimpleDateFormat)))
 
@@ -52,6 +53,7 @@
       (log/debug "KLDAP-D003: ldap-bind: Error binding user account " dn ":" e)
       (dispatch-error err-defs e))))
 
+
 (defn user-connect [ldap-conf err-defs dn password]
   (try
     (ldap/connect (assoc ldap-conf :num-connections 1 :bind-dn dn :password password))
@@ -59,11 +61,14 @@
       (log/warn "KLDAP-W001: user-connect Error connecting as user" dn ":" e)
       (dispatch-error err-defs e))))
 
+
 (def ^:private DEFAULT_USER_RE #"[a-zA-Z0-9_\-\.]+")
+
 
 ; TODO uporządkować zarządzanie wyjątkami - nie ma sensu sprawdzać wyjątki LDAP na wielu poziomach jednocześnie
 
 ; TODO test na defaultowe wartości (bo chyba nie działają)
+; TODO pozbyć się rzucania wyjątków;
 (defn ldap-lookup-dn [conn err-defs {:keys [base-dn user-query user-re login-tmout]} id]
   (try+
     (if (and (not (empty? id)) (re-matches (or user-re DEFAULT_USER_RE) id))
@@ -92,41 +97,55 @@
       (dispatch-error err-defs e))))
 
 
-(defn ldap-auth-fn [conn ldap-conf err-defs]
-  (fn [_ {{username :username password :password} :params :as req}]
-    (let [dn (ldap-lookup-dn conn err-defs ldap-conf username)]
-      (log/trace "KLDAP-T001: ldap-auth-fn: Found user DN: " dn)
-      (ldap-bind ldap-conf err-defs dn password)
-      {:id username :dn dn :attributes {}})))
+(defn ldap-auth-wfn
+  ([conn ldap-conf err-defs]
+    (ldap-auth-wfn identity conn ldap-conf err-defs))
+  ([f conn ldap-conf err-defs]
+    (fn [{{:keys [username password]} :credentials :as req}]
+      (try+
+        (let [dn (ldap-lookup-dn conn err-defs ldap-conf username)]
+          (ldap-bind ldap-conf err-defs dn password)
+          (f (assoc req :principal {:id username :dn dn :attributes {}})))
+        (catch [:type :login-failed] {msg :msg}
+          (kc/login-failed req msg))))))
 
 
-(defn ldap-lookup-fn [conn ldap-conf err-defs]
-  (fn [{id :id :as princ} _]
-    (let [dn (ldap-lookup-dn conn err-defs ldap-conf id)]
-      (log/trace "Found user DN: " dn)
-      (assoc princ :dn dn))))
+(defn ldap-lookup-wfn                                       ; TODO optional flag
+  ([conn ldap-conf err-defs]
+    (ldap-lookup-wfn identity conn ldap-conf err-defs))
+  ([f conn ldap-conf err-defs]
+    (fn [{{id :id} :princ :as req}]
+      (try+
+        (let [dn (ldap-lookup-dn conn err-defs ldap-conf id)]
+          (f (assoc-in req [:principal :dn] dn)))
+        (catch [:type :login-failed] {msg :msg}
+          (kc/login-failed req msg))))))
 
 
-(defn ldap-attr-fn [conn attr-map]
-  (fn [{:keys [dn attributes] :as princ} _]
-    (let [entry (ldap/get conn dn (keys attr-map))]
-      (if entry
-        (assoc princ
-          :attributes
-          (into (or attributes {}) (for [[k1 k2] attr-map] {k2 (k1 entry)})))
-        (ku/login-failed "Cannot obtain user data.")))))
+(defn ldap-attr-wfn
+  ([conn attr-map]
+    (ldap-attr-wfn identity conn attr-map))
+  ([f conn attr-map]                                        ; TODO optional flag
+    (fn [{{:keys [dn attributes]} :principal :as req}]
+      (let [entry (ldap/get conn dn (keys attr-map))]
+        (if entry
+          (f (assoc-in req [:principal attributes]
+                       (into (or attributes {}) (for [[k1 k2] attr-map] {k2 (k1 entry)}))))
+          (kc/login-failed req "Cannot obtain user data."))))))
 
 
-(defn ldap-roles-fn [conn attr to-attr regex]
-  (fn [princ _]
-    (let [entry (ldap/get conn (:dn princ) [attr])
-          attrs (if (string? (attr entry)) [(attr entry)] (attr entry))]
-      (if entry
-        (assoc-in
-          princ [:attributes to-attr]
-          (filterv not-empty
-                   (for [g attrs] (second (re-find regex g)))))
-        (ku/login-failed "Cannot obtain user data.")))))
+(defn ldap-roles-wfn                                        ; TODO optional flag
+  ([conn attr to-attr regex]
+    (ldap-roles-wfn identity conn attr to-attr regex))
+  ([f conn attr to-attr regex]
+    (fn [{{:keys [dn] :as princ} :principal :as req}]
+      (let [entry (ldap/get conn dn [attr])
+            attrs (if (string? (attr entry)) [(attr entry)] (attr entry))]
+        (if entry
+          (f (assoc-in req [:principal :attributes to-attr]
+                       (filterv not-empty (for [g attrs] (second (re-find regex g))))))
+          (kc/login-failed req "Cannot obtain user roles."))))))
+
 
 ; TODO recursive LDAP group resolver
 

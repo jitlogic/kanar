@@ -82,11 +82,11 @@
 
 (def jose-config-schema
   "Configuration for JOSE signing and encryption"
-  {:sign-alg       (apply s/enum (keys JOSE-SIGN-ALGORITHMS)) ; Signature algorithm
-   :sign-key key-config-schema                                ; Signature key
+  {:sign-alg       (apply s/enum (keys JOSE-SIGN-ALGORITHMS))          ; Signature algorithm
+   :sign-key       key-config-schema                                   ; Signature key
    :enc-alg        (s/maybe (apply s/enum (keys JOSE-ENC-ALGORITHMS))) ; Encryption algorithms
    :enc-method     (s/maybe (apply s/enum (keys JOSE-ENC-METHODS)))    ; Encryption method
-   :enc-key        key-config-schema                        ; Signature key
+   :enc-key        key-config-schema                                   ; Signature key
    })
 
 
@@ -205,10 +205,9 @@
         enc-kp (read-keys enc-key)]
     (fn [obj]
       (let [json-obj (kcu/to-json-object obj)
-            jws-obj (jose-sign jose-cfg json-obj (:prv-key sgn-kp))
+            jws-obj (jose-sign json-obj jose-cfg (:prv-key sgn-kp))
             jwt-obj (if enc-kp (jose-encrypt jws-obj jose-cfg (:pub-key enc-kp)) jws-obj)]
-        (.serialize jwt-obj)))
-    ))
+        (.serialize jwt-obj)))))
 
 
 (defn jwt-decode-fn [{:keys [sign-key enc-key] :as jose-cfg}]
@@ -216,9 +215,8 @@
   (let [sgn-kp (read-keys sign-key)
         enc-kp (read-keys enc-key)]
     (fn [s]
-      (let [jws-obj (jose-decrypt s jose-cfg (:prv-key enc-kp))
+      (let [jws-obj (if enc-kp (jose-decrypt s jose-cfg (:prv-key enc-kp)) s)
             json-obj (jose-verify jws-obj jose-cfg (:pub-key sgn-kp))]
-        (kcu/from-json-object json-obj)))
-    ))
+        (kcu/from-json-object json-obj)))))
 
 

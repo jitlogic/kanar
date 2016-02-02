@@ -169,7 +169,7 @@
 
 
 (defn get-svt-attrs [{:keys [attributes] :as princ} {{attrs :attrs} :service :as svt}]
-  (if (vector? attrs) (select-keys attributes attrs) attributes))
+  (if (vector? attrs) (select-keys attributes attrs) (or attributes {})))
 
 (defn b64 [v]
   (DatatypeConverter/printBase64Binary (.getBytes (str v))))
@@ -203,3 +203,5 @@
     (or (string? x) (number? x)) x))
 
 
+(defn domain-name [url]
+  (and url (second (re-matches #"^(?i:https?)://([^\/]+)(/.*)?" url))))

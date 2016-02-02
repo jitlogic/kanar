@@ -134,7 +134,7 @@
 (defn sso-request-parse-wfn [f & pfns]
   "Parses request parameters and detects SSO protocol (eg. CAS, OAuth20 etc.)."
   (fn [{{:keys [gateway renew warn]} :params :as req}]
-    (let [sso-reqs (for [pfn pfns :let [v (pfn req)]] v)
+    (let [sso-reqs (for [pfn pfns :let [v (pfn req)] :when v] v)
           sso-req (first sso-reqs)]
       (f (merge req (or sso-req
                         {:protocol :none,
@@ -193,7 +193,7 @@
       (let [r (assoc req :service svc)]
         (if (svc-access-fn r)
           (let [sid (kt/new-tid "ST"), svc-url (:service-url r)
-                tkt {:type :svt :tid sid, :url svc-url :service svc :tgt (:tid tgt), :expended false}]
+                tkt {:type :svt :tid sid, :url svc-url :service svc :tgt (:tid tgt), :expended false, :timeout kt/ST-FRESH-TIMEOUT}]
             (kt/ref-ticket ticket-registry (:tid tgt) sid)
             (f (assoc r :svt (kt/new-object ticket-registry tkt))))
           (message-screen r view-fn :error "Service not allowed.")))
@@ -213,6 +213,11 @@
 
 
 (defmulti error-response "Renders error response from SSO. Depending on protocol it might be redirect or error screen." :protocol)
+
+
+(defn login-failed [req msg]
+  (assoc-in (dissoc req :principal) [:view-params :message] msg))
+
 
 
 (defmethod error-response :default [{{:keys [error error_description]} :error :as req}]

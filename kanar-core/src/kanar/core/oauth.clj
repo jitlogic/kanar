@@ -154,7 +154,7 @@
 
 
 (defn- parse-oauth-params-raw [{:keys [response_type client_id scope redirect_uri state response_mode display nonce
-                                   prompt max_age ui_locales id_token_hint login_hint acr_values]}]
+                                 prompt max_age ui_locales id_token_hint login_hint acr_values]}]
   (when (and scope response_type client_id redirect_uri)
     (let [response_type (parse-kw-params RESPONSE-TYPE-PARAMS response_type)
           scope (parse-kw-params SCOPE-PARAMS scope)]
@@ -194,23 +194,24 @@
            :hidden-params oauth-params})))))
 
 
-(defn new-id-token [{:keys [tgt svt oauth-params] :as req} sso-url]
-  (merge
-    {:iss       sso-url
-     :sub       (:id (:princ tgt))
-     :aud       (:id (:service svt))                   ; TODO this should be service id ?
-     :exp       (/ (:timeout svt) 1000)
-     :iat       (/ (kcu/cur-time) 1000)
-     :auth_time (/ (:ctime tgt) 1000)}
-    (if (:nonce oauth-params) {:nonce (:nonce oauth-params)} {})
-    ; TODO tutaj claims - atrybuty użytkownika itd. jako pole "claims" z elementami "userinfo" i "id_tokne" w środku;
-    ))
+(defn new-id-token [{:keys [tgt svt service oauth-params] :as req} sso-url]
+  (let [sid (:id service)]
+    (merge
+      {:iss       sso-url
+       :sub       (:id (:principal tgt))
+       :aud       (if (keyword? sid) (name sid) (str sid)) ; TODO this should be service id ?
+       :exp       (int (/ (+ (kcu/cur-time) kt/ST-EXPENDED-TIMEOUT) 1000))
+       :iat       (int (/ (kcu/cur-time) 1000))
+       :auth_time (int (/ (:ctime tgt) 1000))}
+      (if (:nonce oauth-params) {:nonce (:nonce oauth-params)} {})
+      ; TODO tutaj claims - atrybuty użytkownika itd. jako pole "claims" z elementami "userinfo" i "id_tokne" w środku;
+      )))
 
 
 (defn id-token-wfn [f ticket-registry jwt-encode sso-url]
   "Creates and adds ID token (both raw data structure and encoded)"
-  (fn [req]
-    (if (= :oauth (:protocol req))
+  (fn [{:keys [svt] :as req}]
+    (if (and (= :oauth (:protocol req)) svt)
       (let [id-token (new-id-token req sso-url)]
         (kt/update-ticket ticket-registry (:tid (:svt req)) {:id-token id-token})
         (f (-> req
@@ -222,8 +223,8 @@
 
 (defmethod service-redirect :oauth [{:keys [service-url tgt svt oauth-params id-token-encoded]}]
   (let [code_arg (if (:tid svt) (str "code=" (ku/url-enc (:tid svt))))
-        state_arg (if (contains? (:scope oauth-params) :code) (str "state=" (ku/url-enc (:state oauth-params))))
-        token_arg (if (contains? (:scope oauth-params) :id_token) (str "id_token=" (ku/url-enc id-token-encoded)))
+        state_arg (if (contains? oauth-params :state) (str "state=" (ku/url-enc (:state oauth-params))))
+        token_arg (if (contains? oauth-params :id_token) (str "id_token=" (ku/url-enc id-token-encoded)))
         suffix (cs/join "&" (filter string? [code_arg state_arg token_arg]))]
     {:status  302
      :body    "Redirecting ..."
@@ -245,71 +246,72 @@
    :body (json/write-str data)})
 
 
-;(defn token-error-response [error-code]
-;  (json-response 400 {:error (name error-code)}))
-
-
 (defn- handle-token-authorization-code-cmd [{{:keys [code redirect_uri]} :params :as req} ticket-registry jwt-encode]
-  (let [svt (kt/get-ticket ticket-registry code)]
+  (let [{sid :tid :as svt} (kt/get-ticket ticket-registry code)]
     (cond
       (or (empty? code) (empty? redirect_uri))
       (do
         ; TODO audit here
         (log/warn "KOAUTH-W007: token-request-handler: missing token_code or redirect_uri")
-        (json-response 400 {:error :invalid_request}))
+        (json-response 400 {:error :invalid_request, :error_description "Missing parameters (core or redirect_uri)."}))
       (nil? svt)
       (do
         ; TODO audit here
         (log/warn "KOAUTH-W006: token-request-handler: invalid token  code: " code)
-        (json-response 400 {:error :invalid_request}))
+        (json-response 400 {:error :invalid_request, :error_description "Invalid token code."}))
       (not= redirect_uri (:url svt))
       (do
         ; TODO audit here
         (log/warn "KOAUTH-W009: token-request-handler: invalid redirect_uri: " redirect_uri " for token code " code)
-        (json-response 400 {:error :invalid_request})
+        (json-response 400 {:error :invalid_request, :error_description "Invalid redirect URI."})
         )
       (:expended svt)
       (do
         ; TODO audit here
         (log/warn "KOAUTH-W008: token-request-handler: token already expended: " code)
-        (json-response 400 {:error :invalid_request}))
+        (json-response 400 {:error :invalid_request, :error_description "Token already used."}))
       :else
       (do
         ; TODO audit here
         (log/info "KOAUTH-I008: token-request-handler: validated token code " code)
-        (kt/update-ticket ticket-registry (:tid svt) {:expended true})
+        (kt/update-ticket ticket-registry sid {:expended true})
         (let [access-token (kt/new-tid "AT")
-              refresh-token ((kt/new-tid "RT"))]
-          (kt/alias-ticket ticket-registry (:tid svt) access-token {:type :access-token})
-          (kt/alias-ticket ticket-registry (:tid svt) refresh-token {:type :refresh-token})
+              refresh-token (kt/new-tid "RT")]
+          (kt/alias-ticket ticket-registry sid access-token {:type :access-token})
+          (kt/alias-ticket ticket-registry sid refresh-token {:type :refresh-token})
+          (kt/update-ticket ticket-registry sid {:access-token access-token})
           (json-response 200
-            {:access_token  access-token
-             :token_type    "Bearer"
-             :refresh_token refresh-token
-             :expires_in    (/ kt/ST-EXPENDED-TIMEOUT 1000)
-             :id_token      (jwt-encode (:id-token svt))})))
+                         {:access_token  access-token
+                          :token_type    "Bearer"
+                          :refresh_token refresh-token
+                          :expires_in    (int (/ kt/ST-EXPENDED-TIMEOUT 1000))
+                          :id_token      (jwt-encode (:id-token svt))})))
       )))
 
 
-(defn handle-token-refresh-cmd [{:keys [refresh_token] :as req} ticket-registry jwt-encode]
-  (let [{sid :sid :as rt} (kt/get-ticket ticket-registry refresh_token)
+(defn handle-token-refresh-cmd [{{:keys [refresh_token]} :params :as req} ticket-registry jwt-encode]
+  (let [{sid :tid :as rt} (kt/get-ticket ticket-registry refresh_token)
         svt (kt/get-ticket ticket-registry sid)]
     (cond
       (not refresh_token)
       (do
         ; TODO audit here
         (log/warn "KOAUTH-W001: token-refresh-handler: missing refresh_token")
-        (json-response 400 {:error :invalid-request}))
+        (json-response 400 {:error :invalid-request, :error_description "Malformed or missing refresh token."}))
       (nil? svt)
       (do
         ; TODO audit here
         (nil? svt)
         (log/warn "KOAUTH-W002: token-token-refresh-handler-handler; no such token" refresh_token)
-        (json-response 400 {:error :invalid-request}))
+        (json-response 400 {:error :invalid-request, :error_description "No such token."}))
       :else
       (let [t (/ (ku/cur-time) 1000)]
         (kt/update-ticket ticket-registry refresh_token {:id-token (assoc (:id-token svt) :iat t)})
-        (json-response 200 (assoc (:id-token svt) :iat t)))
+        (json-response 200
+                       {:access_token (:access-token svt)
+                        :token_type "Bearer"
+                        :refresh_token refresh_token
+                        :expires_in (int (/ kt/ST-EXPENDED-TIMEOUT 1000))}))
       )))
 
 
@@ -319,14 +321,15 @@
     (case (parse-kw-param TOKEN-GRANT-TYPES grant_type)
       :authorization_code (handle-token-authorization-code-cmd req ticket-registry jwt-encode)
       :refresh_token (handle-token-refresh-cmd req ticket-registry jwt-encode)
-      (json-response 400 {:error :invalid_request}))))
+      (json-response 400 {:error :invalid_request, :error_description "Invalid grant type."}))))
 
 
 (defn token-userinfo-handler-fn [ticket-registry]
   (fn [{{{auth :value} "Authorization"} :headers :as req}]
     (if-let [access-token (if (and auth (re-matches #"^(?i)(Bearer)\s+\S+$" auth)) (second (cs/split auth #"\s+")))]
       (if-let [svt (kt/get-ticket ticket-registry access-token)]
-        (json-response 200 (ku/get-svt-attrs svt))
+        (let [{:keys [princ]} (kt/get-ticket ticket-registry (:tgt svt))]
+          (json-response 200 (into (ku/get-svt-attrs princ svt) {:sub (:id princ)})))
         (json-response 401 {:error :invalid_token, :error_description "Access token invalid or expired."}))
       (json-response 401 {:error :invalid_token, :error_description "Access token missing or malformed."}))))
 
