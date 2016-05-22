@@ -1,10 +1,7 @@
 (ns kanar.ldap-test
   (:require
     [clojure.test :refer :all]
-    [kanar.ldap :as kl]
-    [slingshot.slingshot :refer [try+ throw+]])
-  (:import
-    (com.unboundid.ldap.listener InMemoryDirectoryServerConfig InMemoryDirectoryServer)))
+    [kanar.ldap :as kl]))
 
 
 (def BASE-DN "o=kanar,dc=io")
