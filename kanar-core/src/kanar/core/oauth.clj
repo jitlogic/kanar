@@ -183,7 +183,7 @@
 
 (defn parse-oauth-params-fn [jose-cfg]
   (let [jwt-decode (kcc/jwt-decode-fn jose-cfg)]
-    (fn [{:keys [params] :as req}]
+    (fn [{:keys [params hidden-params] :as req}]
       (if-let [oauth-params (or (parse-oauth-params-raw params) (parse-oauth-params-jwt params jwt-decode))]
         (merge
           req
@@ -191,7 +191,7 @@
            :subprotocol   :openid-connect
            :service-url   (:redirect_uri oauth-params)
            :oauth-params  oauth-params
-           :hidden-params oauth-params})))))
+           :hidden-params (merge oauth-params hidden-params)})))))
 
 
 (defn new-id-token [{:keys [tgt svt service oauth-params] :as req} sso-url]
@@ -208,26 +208,30 @@
       )))
 
 
-(defn id-token-wfn [f ticket-registry jwt-encode sso-url]
+(defn id-token-wfn
   "Creates and adds ID token (both raw data structure and encoded)"
-  (fn [{:keys [svt] :as req}]
-    (if (and (= :oauth (:protocol req)) svt)
-      (let [id-token (new-id-token req sso-url)]
-        (kt/update-ticket ticket-registry (:tid (:svt req)) {:id-token id-token})
-        (f (-> req
-               (assoc :id-token id-token)
-               (assoc :id-token-encoded (jwt-encode id-token)))))
-      (f req)
-      )))
+  ([ticket-registry jwt-encode sso-url]
+    (id-token-wfn identity ticket-registry jwt-encode sso-url))
+  ([f ticket-registry jwt-encode sso-url]
+   (fn [{:keys [svt] :as req}]
+     (if (and (= :oauth (:protocol req)) svt)
+       (let [id-token (new-id-token req sso-url)]
+         (kt/update-ticket ticket-registry (:tid (:svt req)) {:id-token id-token})
+         (f (-> req
+                (assoc :id-token id-token)
+                (assoc :id-token-encoded (jwt-encode id-token)))))
+       (f req)
+       ))))
 
 
-(defmethod service-redirect :oauth [{:keys [service-url tgt svt oauth-params id-token-encoded]}]
+(defmethod service-redirect :oauth [{:keys [service-url tgt svt oauth-params id-token-encoded] :as req}]
   (let [code_arg (if (:tid svt) (str "code=" (ku/url-enc (:tid svt))))
         state_arg (if (contains? oauth-params :state) (str "state=" (ku/url-enc (:state oauth-params))))
         token_arg (if (contains? oauth-params :id_token) (str "id_token=" (ku/url-enc id-token-encoded)))
         suffix (cs/join "&" (filter string? [code_arg state_arg token_arg]))]
     {:status  302
      :body    "Redirecting ..."
+     :req     req
      :headers {"Location" (str service-url (if (.contains service-url "?") "&" "?") suffix)}
      :cookies {"CASTGC" (kcu/secure-cookie (:tid tgt))}}))
 

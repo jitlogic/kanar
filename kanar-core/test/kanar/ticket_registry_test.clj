@@ -3,16 +3,14 @@
   (:require
     [clojure.test :refer :all]
     [kanar.core.ticket :as kt]
-    [kanar.core.util :as ku]
-    [clojure.test.check :as tc]
-    [clojure.test.check.generators :as gen])
+    [kanar.core.util :as ku])
   (:import (java.util HashMap)))
 
 (def ^:dynamic *treg-atom* (atom {}))
-(def ^:dynamic *atr* (kt/atom-ticket-registry *treg-atom*))
+;(def ^:dynamic *atr* (kt/atom-ticket-registry *treg-atom*))
 
 (def ^:dynamic *treg-map* (HashMap.))
-(def ^:dynamic *mtr* (kt/map-ticket-registry *treg-map*))
+;(def ^:dynamic *mtr* (kt/map-ticket-registry *treg-map*))
 
 (def ^:dynamic *cur-time* (atom 0))
 

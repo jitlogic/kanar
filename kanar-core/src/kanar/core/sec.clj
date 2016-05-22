@@ -6,7 +6,8 @@
     [slingshot.slingshot :refer [try+ throw+]]
     [ring.util.request :refer [body-string]]
     [clojure.java.io :as io]
-    [taoensso.timbre :as log])
+    [taoensso.timbre :as log]
+    [kanar.core :as kc])
   (:import (javax.xml.validation SchemaFactory Schema Validator)
            (javax.xml XMLConstants)
            (javax.xml.transform.stream StreamSource)
@@ -50,7 +51,7 @@
     xml
     (catch Exception e
       (log/error "SOAP_XML" (kcu/b64 xml))
-      (ku/security-error (str "XML does not match schema." e)))))
+      (throw+ {:type :security-error :msg (str "XML does not match schema." e)}))))
 
 
 (defn new-saml-vfn []
@@ -71,11 +72,11 @@
     (cond
       (empty? vdc) v
       (and optional (nil? v)) nil
-      (nil? v) (do (log/error "VAL_NIL" vdc) (kcu/security-error msg))
-      (some #(Character/isISOControl ^Character %) s) (do (log/error "VAL_ISO"  vdc (kcu/b64 v)) (kcu/security-error msg))
+      (nil? v) (do (log/error "VAL_NIL" vdc) (throw+ {:type :security-error :msg msg}))
+      (some #(Character/isISOControl ^Character %) s) (do (log/error "VAL_ISO"  vdc (kcu/b64 v)) (throw+ {:type :security-error :msg msg}))
       re (if-let [rv (re-matches re s)]
            (if re-grp (nth rv re-grp) v)
-           (do (log/error "VAL_RE" vdc (kcu/b64 v)) (kcu/security-error msg)))
+           (do (log/error "VAL_RE" vdc (kcu/b64 v)) (throw+ {:type :security-error :msg msg})))
       vfn (vfn s)
       :else s)))
 
@@ -83,7 +84,7 @@
 (defn validate-and-filter-req [req vd]
   "Validates HTTP request and filters out unnecessary fields, headers, cookies, params."
   (when-not (contains? (set (keys vd)) (:request-method req))
-    (kcu/security-error (str "Invalid request method " (:request-method req))))
+    (throw+ {:type :security-error :msg (str "Invalid request method " (:request-method req))}))
   (let [md (get vd (:request-method req)),
         body (if (contains? vd :body) (kcu/oneliner (body-string req)) nil)]
     (into (merge {:body (validate-and-filter-val body (:body vd))} (select-keys req default-req-attrs))
@@ -113,22 +114,20 @@
         (vfn req msg))))
 
 
-(defn wrap-http-validations [f vvdefs vfns]
+(defn wrap-http-validations [f vvdefs vfns & {:keys [pass-attrs]}]
   (fn [req]
     (let [vfn (vfns (:uri req) (:default vfns))]
       (try+
         (let [vd (vvdefs (:uri req) (:default vvdefs))
               vr (validate-and-filter-req req vd)]
-          (f vr))
+          (f (into (select-keys req pass-attrs) vr)))
         (catch [:type :security-error] e
           (let [req (if (:body req) (update-in req [:body] body-string) req)]
             (log/error "Error parsing request" (:uri req) ":" e "encoded request:"
-                       (kcu/b64 req)))
+                       (kcu/b64 (kc/sanitize-rec req))))
           (when (:body req)
             (log/error "encoded body: " ))
-          {:status  200
-           :headers {"Content-Type" "text/html; charset=utf-8"}
-           :body    (vfn req (or (:msg e) ""))})))))
+          (vfn req (or (:msg e) "")))))))
 
 
 (defn extract-param-keys [vvdefs]
@@ -254,7 +253,7 @@
 (def saml-validate-vd
   {:post    {:params {:TARGET  svc-url-vd
                       :SAMLart {:re ST_TICKET_RE :msg "Invalid ticket" :optional true}}}
-   :body    {:vfn (new-saml-vfn) :optional true}
+   :body    {:vfn identity :optional true}                         ; TODO naprawić walidację schematu
    :headers xff-headers-vd})
 
 

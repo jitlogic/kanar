@@ -1,16 +1,16 @@
 (ns kanar.core.crypto
   "Cryptographic utility functions for signing XML and JSON data."
   (:import
-    (net.minidev.json JSONObject JSONArray)
-    (com.nimbusds.jose JWSAlgorithm JWSObject JWSHeader JWEAlgorithm Payload EncryptionMethod JWEHeader JWEHeader$Builder JWEObject)
+    (net.minidev.json JSONObject)
+    (com.nimbusds.jose JWSAlgorithm JWSObject JWSHeader JWEAlgorithm Payload EncryptionMethod JWEHeader$Builder JWEObject JWEHeader)
     (com.nimbusds.jose.crypto MACSigner MACVerifier RSASSASigner RSASSAVerifier ECDSASigner ECDSAVerifier DirectEncrypter
                               DirectDecrypter RSAEncrypter RSADecrypter AESEncrypter AESDecrypter ECDHEncrypter ECDHDecrypter)
     (java.security.interfaces RSAPrivateKey RSAPublicKey ECPrivateKey ECPublicKey)
-    (javax.crypto SecretKey)
+    (javax.crypto SecretKey KeyGenerator)
     (com.nimbusds.jwt SignedJWT)
     (java.util Collections)
     (org.w3c.dom Document)
-    (java.security KeyStore)
+    (java.security KeyStore MessageDigest)
     (java.io FileInputStream)
     (javax.xml.bind DatatypeConverter)
     (javax.xml.crypto.dsig XMLSignatureFactory DigestMethod Transform CanonicalizationMethod SignatureMethod XMLSignature)
@@ -218,5 +218,28 @@
       (let [jws-obj (if enc-kp (jose-decrypt s jose-cfg (:prv-key enc-kp)) s)
             json-obj (jose-verify jws-obj jose-cfg (:pub-key sgn-kp))]
         (kcu/from-json-object json-obj)))))
+
+
+(defn md5 [s]
+  "Calculates and returns MD5 sum of given string."
+  (let [algorithm (MessageDigest/getInstance "MD5")
+        size (* 2 (.getDigestLength algorithm))
+        raw (.digest algorithm (.getBytes s))
+        sig (.toString (BigInteger. 1 raw) 16)
+        padding (apply str (repeat (- size (count sig)) "0"))]
+    (str padding sig)))
+
+
+(defn jwe-encrypt [{:keys [enc-alg enc-method enc-key] :as jose-cfg} obj]
+  (let [header (JWEHeader. ^JWEAlgorithm (JOSE-ENC-ALGORITHMS enc-alg) ^EncryptionMethod (JOSE-ENC-METHODS enc-method))
+        jwe-obj (JWEObject. header (Payload. (pr-str obj)))]
+    (.encrypt jwe-obj (jose-encrypter jose-cfg (:prv-key (read-keys enc-key))))
+    (.serialize jwe-obj)))
+
+
+(defn jwe-decrypt [{:keys [enc-key]} ^String jwe-str]
+  (let [jwe-obj (JWEObject/parse jwe-str)]
+    (.decrypt jwe-obj (DirectDecrypter. ^SecretKey (:prv-key (read-keys enc-key))))
+    (-> jwe-obj .getPayload .toString read-string)))
 
 

@@ -2,7 +2,8 @@
   "File based authentication plugin. This is useful for test and development, not really for production."
   (:require
     [taoensso.timbre :as log]
-    [kanar.core.util :as ku])
+    [kanar.core.util :as ku]
+    [kanar.core :as kc])
   (:import
     (java.io File)
     (java.security MessageDigest)))
@@ -25,17 +26,6 @@
       (= pwd-hash password)))
 
 
-; TODO enhance principal attributes instead of overwriting it (with option to switch between overwrite/enhance modes);
-(defn file-lookup-fn [fdb-state & {:keys [optional]}]
-  (fn [{:keys [id] :as princ} _]
-    (let [urec (get @fdb-state id)]
-      (if-not urec
-        (if optional
-          princ
-          (ku/login-failed "Invalid username or password.")))
-      (ku/merge-principals (or princ {}) (dissoc urec :password)))))
-
-
 (defn file-auth-wfn
   ([user-data]
    (file-auth-wfn identity user-data))
@@ -44,21 +34,21 @@
      (let [princ (user-data username)]
        (log/trace "Principal from user data: " princ)
        (if (or (nil? princ) (not (check-password (:password princ) password)))
-         (assoc-in (dissoc req :principal) [:view-params :message] "Invalid username or password")
+         (assoc-in (dissoc req :principal) [:view-params :message] "Login failed.")
          (f (assoc req :principal (ku/merge-principals (:principal req {}) (dissoc princ :password))))
          )))))
 
 
 (defn file-lookup-wfn
-  ([user-data & {:keys [optional]}]
-    (file-lookup-wfn identity user-data :optional optional))
-  ([f user-data & {:keys [optional]}]
+  ([user-data {:keys [optional]}]
+    (file-lookup-wfn identity user-data {:optional optional}))
+  ([f user-data {:keys [optional]}]
     (fn [{{:keys [id]} :principal :as req}]
       (let [princ (user-data id)]
         (cond
           princ (f (assoc req :principal (ku/merge-principals (:principal req {}) (dissoc princ :password))))
           optional (f req)
-          :else (assoc-in (dissoc req :principal) [:view-params :message] "Invalid username or password")))
+          :else (assoc-in (dissoc req :principal) [:view-params :message] "Login failed.")))
         )))
 
 

@@ -7,7 +7,7 @@
 
 (deftest test-parse-cas-req
   (let [pfn (kc/sso-request-parse-wfn identity kcc/parse-cas-req kcs/parse-saml2-req)]
-    (is (= {:protocol :none} (pfn {})))))
+    (is (= {:protocol :none, :login :page, :prompt :none, :sesctl :none} (pfn {})))))
 
 (def SAMPLE-SAML-REQ "ZZC7bgIxFER7vsJysxX7AAUpFgaRpAgSiRCQFOm83pvFYF+DrxcIX5/lUURKPzNndIbjk7PsAIGMR5kUaZ4wigorZT2CTH6AkvGoMyTl7E5MmrjGBewboMimRA1M8ZKOkvfyYtDNi27eX+WP4mEgev0vziZEEGI7/eyRGgdhCeFgNHwsZpKvY9yRyLLaKWNT7V1msPQnzqYvkpfwXZoSNqbakDodndbnPZ4btansdnteEyl/dMdtzdk8+Oi1t08GK4O15E1A4RUZEqgcUBq1WE7eZqKX5qK8hUi8rlbz7gIqE0DH68jBVBDe24bktfe1hcslzj7vbnhb56y1hSSuNv6BxF/Q7v6Ks2zU+QU=")
 

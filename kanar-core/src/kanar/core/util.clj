@@ -1,6 +1,6 @@
 (ns kanar.core.util
   (:import (java.text SimpleDateFormat)
-           (java.util Date TimeZone Collections)
+           (java.util Date TimeZone)
            (java.net URLEncoder)
            (javax.xml.bind DatatypeConverter)
            (javax.xml.transform.dom DOMResult)
@@ -8,8 +8,9 @@
            (javax.xml.parsers DocumentBuilderFactory)
            (com.sun.org.apache.xml.internal.serialize OutputFormat XMLSerializer)
            (org.w3c.dom Document)
-           (java.io StringWriter)
-           (net.minidev.json JSONObject JSONArray))
+           (java.io StringWriter PrintWriter)
+           (net.minidev.json JSONObject JSONArray)
+           (java.util.concurrent ExecutorService))
   (:require
     [slingshot.slingshot :refer [try+ throw+]]
     [taoensso.timbre :as log]
@@ -95,72 +96,11 @@
      :headers {"Location" url}}))
 
 
-(defn login-failed [msg]
-  (throw+ {:type :login-failed :msg msg}))
-
-
-(defn chpass-failed [msg]
-  (throw+ {:type :chpass-failed :msg msg}))
-
-
-(defn login-cont [resp]
-  (throw+ {:type :login-cont :resp resp}))
-
-
-(defn fatal-error [msg & {:as args}]
-  (throw+ {:type :fatal-error :msg msg :args args}))
-
-
-(defn security-error [msg & {:as args}]
-  (throw+ {:type :security-error :msg msg :args args}))
-
-
-(defn log-auth-fn [msg]
-  (fn [princ _]
-    (log/debug msg princ)
-    princ))
-
-
-(defn parse-domain-auth-fn [dom-map]
-  (fn [{id :id idom :dom :as princ} {{dom :dom} :params :as req}]
-    (let [[un & [ud & _]] (clojure.string/split id #"@")]
-      (into princ {:id un, :dom (or (dom-map ud) idom dom)}))))
-
-
-(defn multidomain-auth-fn [& {:as domains}]
-  (fn [princ {{dom :dom} :params :as req}]
-    (let [afn (domains dom)]
-      (if (fn? afn)
-        (afn princ req)
-        (login-failed "Invalid login domain.")))))
-
-
-(defn chain-auth-fn [& auth-fns]
-  "Chains several auth functions together. Returns auth function that will sequentially call all passed auth-fn
-   and pass result principal to next fn."
-  (fn [princ req]
-    (loop [[f & fns] auth-fns, p princ]
-      (if f (recur fns (f p req)) p))))
-
-
-(defn const-attr-fn [& {:as attrs}]
-  ""
-  (fn [{:keys [attributes] :as princ} _]
-    (assoc princ
-      :attributes
-      (into (or attributes {}) attrs))))
-
-
 (defn wrap-set-param [f param pfn]
   "Ring wrapper settings arbitrary parameter [param] with result result of function [pfn] called with request as argument."
   (fn [req]
     (let [val (if (keyword? pfn) pfn (pfn req))]
       (f (assoc-in req [:params param] val)))))
-
-
-(defn auth-domain-fn [default-dom]
-  (fn [princ {{dom :dom} :params}]
-    (assoc princ :dom (or dom default-dom))))
 
 
 (defn merge-principals [{attr1 :attributes :as p1} {attr2 :attributes :as p2}]
@@ -205,3 +145,31 @@
 
 (defn domain-name [url]
   (and url (second (re-matches #"^(?i:https?)://([^\/]+)(/.*)?" url))))
+
+
+(defn error-with-trace [e]
+  (if (instance? Throwable e)
+    (let [sw (StringWriter.) pw (PrintWriter. sw)]
+      (.printStackTrace e pw)
+      (.toString sw))
+    (str e)))
+
+
+(defn no-nulls [x]
+  (cond
+    (map? x) (into {} (for [[k v] x :when v] {k v}))
+    (list? x) (for [v x :when v] v)
+    (vector? x) (vec (for [v x :when v] v))
+    :else x))
+
+
+(defn async-pooled [f ^ExecutorService pool]
+  (fn [& args]
+    (.submit pool ^Callable
+      (cast Callable (fn [] (apply f args))))))
+
+(defn combine-maps [& vals]
+  (let [vals (filter (complement nil?) vals)]
+    (if (every? map? vals)
+      (apply merge-with combine-maps vals)
+      (last vals))))

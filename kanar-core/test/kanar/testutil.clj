@@ -10,7 +10,7 @@
     [kanar.core.ticket :as kt]
     [ring.util.response :refer [redirect]]
     [compojure.core :refer [routes GET ANY rfn]])
-  (:import (java.security KeyPairGenerator SecureRandom)
+  (:import (java.security KeyPairGenerator)
            (javax.crypto KeyGenerator)
            (java.net URLDecoder)))
 
@@ -27,7 +27,7 @@
 
 (defn get-rdr [r]
   "Extracts redirection URL from HTTP response."
-  (get-in r [:headers "Location"]))
+  (get-in r [:headers "Location"] ""))
 
 
 (defn parse-url [url]
@@ -55,7 +55,7 @@
 (defn get-ticket [r]
   (let [rdr (get-rdr r)
         m (matches #".*ticket=(.*)" rdr)]
-    (second m)))
+    (when m (second m))))
 
 
 (defn get-samlart [r]
@@ -86,8 +86,6 @@
 
 ; Generic end-to-end test fixture
 
-(defn test-audit-fn [_ _ _ _ _])
-
 (def ^:dynamic *dsa-key-pair* (gen-pub-keypair :DSA 1024))
 (def ^:dynamic *treg-atom* (atom {}))
 (def ^:dynamic kanar nil)
@@ -106,12 +104,28 @@
 
 (defn auth-testfn [{{:keys [username password]} :credentials :as req}]
   (if (= username password)
-    (assoc req :principal {:id username})
-    (assoc-in req [:view-params :message] "Invalid username or password.")))
+    (assoc req :principal {:id username} :login :success)
+    (assoc-in req [:view-params :message] "Login failed.")))
 
 
 (defn select-kanar-domain [{{:keys [dom]} :params}]
   (if (string? dom) (keyword dom) :unknown))
+
+; Virtual logs
+(def dummy-log (atom []))
+
+
+(defn print-logs []
+  (doseq [log @dummy-log]
+    (println log)))
+
+(defn setup-logs []
+  (taoensso.timbre/merge-config!
+    {:appenders {:rotor {:enabled? true
+                         :fn (fn [data] (swap! dummy-log conj ((:output-fn data) data)))}
+                 :println {:enabled? false}}})
+  (taoensso.timbre/set-level! :trace))
+
 
 
 (def ^:dynamic *test-services*
@@ -121,19 +135,22 @@
 
 
 ; TODO przenieść konsturkcję tego do dedykowanego config namespace;
-(defn kanar-routes-new [{:keys [ticket-registry view-fn services auth-fn svc-access-fn jose-cfg jwt-enc sso-url]}]
-  (let [login-fn (kc/-->
+(defn kanar-routes-new [{:keys [ticket-registry services auth-fn svc-access-fn jose-cfg jwt-enc sso-url]}]
+  (let [login-fn (kc/traced-->
+                   [:test]
+                   kc/trace-begin-wfn
+                   (kc/trace-log-wfn {:enabled true, :path "/tmp/trace.log", :filter true})
                    (kc/sso-request-parse-wfn kcc/parse-cas-req (kco/parse-oauth-params-fn jose-cfg))
                    (kc/tgt-lookup-wfn ticket-registry)
-                   (kc/login-flow-wfn ticket-registry (kc/form-login-flow-wfn auth-fn view-fn))
-                   (kc/prompt-consent-screen-wfn view-fn)
-                   (kc/service-lookup-wfn ticket-registry view-fn services svc-access-fn)
+                   (kc/login-flow-wfn ticket-registry (kc/form-login-flow-wfn auth-fn))
+                   (kc/prompt-consent-screen-wfn)
+                   (kc/service-lookup-wfn ticket-registry services svc-access-fn)
                    (kco/id-token-wfn ticket-registry jwt-enc sso-url)
                    kc/service-redirect)
         validate-fn (kcc/cas10-validate-handler ticket-registry)
         validate2-fn (kcc/cas20-validate-handler ticket-registry #"ST-.*")
         validate-pfn (kcc/cas20-validate-handler ticket-registry #"(ST|PT)-.*")
-        logout-fn (kcc/logout-handler ticket-registry view-fn)
+        logout-fn (kcc/logout-handler ticket-registry)
         proxy-fn (kcc/proxy-handler ticket-registry)
         saml-validate-fn (kcc/saml-validate-handler ticket-registry)
         oauth-token-fn (kco/token-request-handler-fn ticket-registry (kccr/jwt-encode-fn *jose-cfg*))
@@ -169,9 +186,12 @@
                     :dom select-kanar-domain)]
     (with-redefs
       [kc/service-logout (fn [_ _] nil)]
+      (setup-logs)
       (f))))
 
 
 (defn dummy-service-logout [url {tid :tid}]
   (swap! *sso-logouts* #(conj % {:url url :tid tid})))
+
+
 

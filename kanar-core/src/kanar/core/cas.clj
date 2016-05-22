@@ -27,14 +27,14 @@
     {:cas-params cas-params-schema}))
 
 
-(defn parse-cas-req [{{:keys [service TARGET gateway renew warn]} :params :as req}]
+(defn parse-cas-req [{{:keys [service TARGET gateway renew warn]} :params hp :hidden-params :as req}]
   (let [login (if gateway :none :page)
         prompt (if warn :consent :none)
         sesctl (if renew :renew :none)
         r1 (merge req {:protocol :cas, :login login, :prompt prompt, :sesctl sesctl})]
     (cond
-      service (merge r1 {:subprotocol :cas, :service-url service :hidden-params {:service service}})
-      TARGET (merge r1 {:subprotocol :saml, :service-url TARGET :hidden-params {:TARGET TARGET}})
+      service (merge r1 {:subprotocol :cas, :service-url service :hidden-params (merge {:service service} hp)})
+      TARGET (merge r1 {:subprotocol :saml, :service-url TARGET :hidden-params (merge {:TARGET TARGET} hp)})
       :else nil)))
 
 
@@ -42,6 +42,7 @@
   (let [suffix (str (if (= subprotocol :cas) "ticket=" "SAMLart=") (:tid svt))]
     {:status  302
      :body    "Redirecting to CAS service ..."
+     :req     req
      :headers {"Location" (str service-url (if (.contains service-url "?") "&" "?") suffix)}
      :cookies {"CASTGC" (ku/secure-cookie (:tid tgt))}}))
 
@@ -52,35 +53,42 @@
 ; Old stuff, to be removed soon
 
 
-(defn logout-handler [ticket-registry view-fn]
+(defn logout-handler [ticket-registry]
   (fn [{{service :service} :params, {{CASTGC :value} "CASTGC"} :cookies :as req}]
-    (let [tgt (kt/get-ticket ticket-registry CASTGC)]
+    (let [tgt (kt/get-ticket ticket-registry CASTGC)
+          req (assoc req :tgt tgt :principal (:princ tgt))]
       (when tgt
-        (doseq [{{asu :app-urls} :service, url :url, :as svt} (kt/session-tickets ticket-registry (:tid tgt))
+        (doseq [{{asu :app-urls :as service} :service, url :url, :as svt} (kt/session-tickets ticket-registry (:tid tgt))
                 :when (.startsWith (:tid svt) "ST")]
+          (audit (assoc req :svt svt, :service service, :service-url url)
+                 :logout-handler :SVT-DESTROY :SUCCESS :protocol :cas )
           (if (empty? asu)                                  ; TODO co z pozostałymi typami ticketów ?
             (service-logout url svt)
             (doseq [url asu]
               (service-logout url svt))))
         (kt/delete-ticket ticket-registry CASTGC)
-        ;(audit app-state req tgt nil :TGT-DESTROYED) ; TODO uzupełnić audit trail
-        )
+        (audit req :logout-handler :TGT-DESTROY :SUCCESS :protocol :cas))
       (if service
         {:status  302
          :body    "Redirecting to service"
          :headers {"Location" service, "Content-type" "text/html; charset=utf-8"}}
-        {:status  200
-         :headers {"Content-type" "text/html; charset=utf-8"}
-         :body    (kc/message-screen req view-fn :ok "User logged out.")}))))
+        (kc/message-screen req :ok "User logged out.")))))
 
 
 (defn cas10-validate-handler [ticket-registry]
   (fn [{{svc-url :service sid :ticket} :params :as req}]
-    (let [svt (kt/get-ticket ticket-registry sid)
-          valid (and svc-url sid svt (re-matches #"ST-.*" sid) (not (:expended svt)) (= svc-url (:url svt)))] ; TODO obsłużenie opcji 'renew'
+    (let [{:keys [ctime timeout tgt service] :as svt} (kt/get-ticket ticket-registry sid)
+          {:keys [princ] :as tgt} (if tgt (kt/get-ticket ticket-registry tgt))
+          req (into req {:tgt tgt, :svt svt, :service service, :principal princ, :service-url (:url svt)})
+          valid (and svc-url sid svt
+                     (re-matches #"ST-.*" sid)
+                     (not (:expended svt))
+                     (= svc-url (:url svt))
+                     (< (ku/cur-time) (+ ctime timeout)))] ; TODO obsłużenie opcji 'renew'
       (when svt
         (kt/update-ticket ticket-registry sid {:expended true}))
-      ;(audit app-state req nil nil (if valid :SERVICE-TICKET-VALIDATED :SERVICE-TICKET-NOT-VALIDATED)) ; TODO uzupełnić audit trail
+      (audit (into req {:tgt tgt, :svt svt, :service service, :service_url (:service-url svt)})
+             :cas10-validate-handler :SVT-VALIDATE (if valid :SUCCESS :FAIL)) ; TODO dopisać cause itd. do audit rekordu
       (log/trace "KCORE-D001: validating ticket" svt "-->" valid)
       (if valid
         (let [tgt (kt/get-ticket ticket-registry (:tgt svt))]
@@ -227,36 +235,44 @@
 (defn cas20-proxy-failure [code msg]
   (cas20 [:cas:proxyFailure {:code code} msg]))
 
-
+; TODO przejść na 'renderowany' chain podobny do login chainu
 (defn cas20-validate-handler [ticket-registry re-tid]
   (fn [{{svc-url :service sid :ticket pgt-url :pgtUrl} :params :as req}]
-    (let [svt (kt/get-ticket ticket-registry sid)]
+    (let [{:keys [ctime timeout tgt service] :as svt} (kt/get-ticket ticket-registry sid)
+          {:keys [princ] :as tgt} (if tgt (kt/get-ticket ticket-registry tgt))
+          req (into req {:tgt tgt, :svt svt, :service service, :principal princ, :service-url (:url svt)})]
       (if svt
         (kt/update-ticket ticket-registry (:tid svt) {:expended true}))
       (cond
         (empty? svc-url)
         (do
-          ;(audit app-state req nil nil :SERVICE-TICKET-NOT-VALIDATED)
+          (audit req :cas20-validate-handler :SVT-VALIDATE :FAIL :cause "INVALID_REQUEST" "Missing 'service' parameter.")
           (log/warn "KCORE-W002: cas20-validate-handler returns INVALID_REQUEST: Missing 'service' parameter; sid:" sid "url:" svc-url)
           (cas20-validate-error "INVALID_REQUEST" "Missing 'service' parameter."))
         (empty? sid)
         (do
-          ;(audit app-state req nil nil :SERVICE-TICKET-NOT-VALIDATED)
+          (audit req :cas20-validate-handler :SVT-VALIDATE :FAIL :cause "Missing 'ticket' parameter.")
           (log/warn "KCORE-W002: cas20-validate-handler returns INVALID_REQUEST: Missing 'ticket' parameter; sid:" sid "url:" svc-url)
           (cas20-validate-error "INVALID_REQUEST", "Missing 'ticket' parameter."))
         (not (re-matches re-tid sid))
         (do
-          ;(audit app-state req nil nil :SERVICE-TICKET-NOT-VALIDATED)
-          (log/warn "KCORE-W003: cas20-validate-handler returns INVALID-TICKET-SPEC: Invalid ticket; sid:" sid "url:" svc-url)
+          (audit req :cas20-validate-handler :SVT-VALIDATE :FAIL :cause "Invalid ticket (SID does not conform).", :svt sid)
+          (log/warn "KCORE-W003: cas20-validate-handler returns INVALID_TICKET_SPEC: Invalid ticket; sid:" sid "url:" svc-url)
           (cas20-validate-error "INVALID_TICKET_SPEC" "Invalid ticket."))
         (or (empty? svt) (:expended svt))
         (do
-          ;(audit app-state req nil nil :SERVICE-TICKET-NOT-VALIDATED)
+          (audit req :cas20-validate-handler :SVT-VALIDATE :FAIL :cause "Invalid ticket (such ticket not found).", :svt sid)
+          (log/warn "KCORE-W003: cas20-validate-handler returns INVALID-TICKET-SPEC: Invalid ticket; sid:" sid "url:" svc-url)
+          (cas20-validate-error "INVALID_TICKET_SPEC" "Invalid ticket."))
+        (> (ku/cur-time) (+ ctime timeout))
+        (do
+          (audit req :cas20-validate-handler :SVT-VALIDATE :FAIL :cause "Invalid ticket (ticket expired).", :svt sid)
           (log/warn "KCORE-W003: cas20-validate-handler returns INVALID-TICKET-SPEC: Invalid ticket; sid:" sid "url:" svc-url)
           (cas20-validate-error "INVALID_TICKET_SPEC" "Invalid ticket."))
         (not= svc-url (:url svt))
         (do
-          ;(audit app-state req nil nil :SERVICE-TICKET-NOT-VALIDATED)
+          (audit req :cas20-validate-handler :SVT-VALIDATE :FAIL :cause "Invalid ticket (service URL does not match).",
+                 :svt sid, :service_url svc-url)
           (log/warn "KCORE-W004: cas20-validate-handler returns INVALID_SERVICE: Invalid service; sid:" sid "url:" svc-url)
           (cas20-validate-error "INVALID_SERVICE" "Invalid service."))
         (and (not (empty? pgt-url)) (= :svt (:type svt)))
@@ -265,19 +281,15 @@
               tgt (kt/get-ticket ticket-registry (:tgt svt))]
           (do
             ; TODO send IOU here
+            ; TODO audit trail here
             (kt/new-object ticket-registry pgt)
             ;(audit app-state req nil nil :SERVICE-TICKET-NOT-VALIDATED)
             (log/info "KCORE-I005: cas20-validate-handler returns grant-pgt-ticket: PGT ticket granted; sid:" sid "url:" svc-url)
-            (cas20-validate-response tgt svt pgt))
-          ;(do
-          ;  ;(audit app-state req nil nil :SERVICE-TICKET-VALIDATED)
-          ;  (log/warn "KCORE-W005: cas20-validate-handler returns UNAUTHORIZED_SERVICE_PROXY: Cannot grant proxy ticket sid:" sid "url:" svc-url)
-          ;  (cas20-validate-error "UNAUTHORIZED_SERVICE_PROXY" "Cannot grant proxy granting ticket."))
-          )
+            (cas20-validate-response tgt svt pgt)))
         :else
         (let [tgt (kt/get-ticket ticket-registry (:tgt svt))]
-          ;(audit app-state req nil nil :SERVICE-TICKET-VALIDATED)
-          (log/info "KCORE-I006: cas20-validate-handler returns service-ticket-validated: Service ticket validated; sid:" sid "url:" svc-url)
+          (audit req :cas20-validate-handler :SVT-VALIDATE :SUCCESS)
+          (log/debug "KCORE-I006: cas20-validate-handler returns service-ticket-validated: Service ticket validated; sid:" sid "url:" svc-url)
           (cas20-validate-response tgt svt nil))))))
 
 
@@ -316,6 +328,7 @@
           (do
             (kt/new-object ticket-registry pxt)
             ;(audit app-state req nil nil :PROXY-TICKET-VALIDATED)
+            ; TODO audit trail here
             (log/warn "KCORE-I007: proxy-handler returns SUCCESS: Ticket correctly validated; pgt:" pgt "url:" svc-url)
             (cas20-proxy-success pxt))
           ;(do
@@ -329,22 +342,23 @@
   (fn [{{svc-url :TARGET SAMLart :SAMLart} :params :as req}]
     (let [saml (body-string req)
           sid (or SAMLart (saml-parse-lookup-tid saml))
-          svt (kt/get-ticket ticket-registry sid)]
+          {:keys [ctime timeout tgt service] :as svt} (kt/get-ticket ticket-registry sid)   ; TODO zbadać timeout podczas walidacji ticketu
+          {:keys [princ] :as tgt} (if tgt (kt/get-ticket ticket-registry tgt))
+          req (into req {:tgt tgt, :svt svt, :service service, :principal princ, :service-url (:url svt)})]
       (when svt
         (kt/update-ticket ticket-registry sid {:expended true}))
       (when-not (= svc-url (:url svt))
         (log/warn "KCORE-W012: Service and validation URL do not match: svc-url=" svc-url "but should be " (:url svt)))
-      (if (and svc-url sid svt (not (:expended svt)) (re-matches #"ST-.*" sid) ; TODO (= svc-url (:url svt))
+      (if (and svc-url sid (re-matches #"ST-.*" sid) svt (not (:expended svt))  ; TODO (= svc-url (:url svt))
                )
         (do
-          (let [tgt (kt/get-ticket ticket-registry (:tgt svt))
-                res (saml-validate-response (:princ tgt) svt)]
-            ;(audit app-state req nil nil :SERVICE-TICKET-VALIDATED)
+          (let [res (saml-validate-response (:princ tgt) svt)]
+            (audit req :saml11-validate-handler :SVT-VALIDATE :SUCCESS)
             (log/trace "KCORE-T001: SAML response: " res)
             res))
         (do
           (log/warn "KCORE-W013: Service ticket NOT validated: svc-url=" svc-url "sid=" sid "svt=" svt " SAML=" saml)
-          ;(audit app-state req nil nil :SERVICE-TICKET-NOT-VALIDATED)
+          (audit req :saml11-validate-handler :SVT-VALIDATE :FAILURE)
           "Error executing SAML validation.\n")))))
 
 

@@ -27,10 +27,11 @@
 
 (deftest basic-login-logout-test
   (testing "Log in with correct password and then logout"
-    (let [r1 (kanar { :uri "/login" :params {:username "test" :password "test"}})]
+    (let [r1 (kanar { :uri "/login" :params {:username "test" :password "test"}})
+          tgc (get-tgc r1)]
       (is (= 200 (:status r1)))
       (is (= 1 (count @*treg-atom*)) "Should create exactly one SSO session.")
-      (is (not (empty? (get-tgc r1))) "Should return CASTGC cookie.")
+      (is (not (empty? tgc)) "Should return CASTGC cookie.")
 
       (testing "Logout with no ticket."
         (let [r2 (kanar {:uri "/logout"})]
@@ -38,7 +39,7 @@
           (is (= 1 (count @*treg-atom*)))) "Original CASTGC cookie should still be there.")
 
       (testing "Logout successfully with existing ticket."
-        (let [_ (kanar {:uri "/logout" :cookies {"CASTGC" {:value (get-tgc r1)}}})]
+        (let [_ (kanar {:uri "/logout" :cookies {"CASTGC" {:value tgc}}})]
           (is (= 0 (count @*treg-atom*)))))
       ))
 
@@ -52,7 +53,7 @@
   (testing "Log in with correct password and CAS service redirection."
     (let [r (kanar { :uri "/login" :params {:username "test" :password "test" :lt "true" :service "https://my-app.com"}})]
       (is (= 302 (:status r)) "Should make redirect.")
-      (is (matches #"https://my-app.com.ticket=ST-.*-XXX", (get-rdr r)))
+      (is (matches #"https://my-app.com.ticket=ST-.*-[A-Z]{3}", (get-rdr r)))
       (is (= 2 (count @*treg-atom*)) "Should create SSO ticket and service ticket."))))
 
 
@@ -119,7 +120,7 @@
   (testing "Try logging in to a service that is not allowed."
     (let [r (kanar {:uri "/login" :params {:service "https://verboten.com" :username "t" :password "t"}})]
       (is (= 200 (:status r)) "Should not redirect anywhere.")
-      (is (= "Service not allowed." (-> r :body :view-params :message)))
+      (is (= "Service not allowed." (-> r :body :message)))
       )))
 
 

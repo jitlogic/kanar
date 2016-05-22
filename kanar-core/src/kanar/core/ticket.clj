@@ -1,8 +1,7 @@
 (ns kanar.core.ticket
   (:require
     [schema.core :as s]
-    [kanar.core.util :as ku])
-  (:import (java.util Map)))
+    [kanar.core.util :as ku]))
 
 (def ^:dynamic TGT-TIMEOUT (* 24 60 60 1000))
 (def ^:dynamic ST-FRESH-TIMEOUT (* 2 60 1000))
@@ -130,6 +129,10 @@
 ;      (del-ticket tr tkt)))
 ;  (del-ticket tr tid))
 
+
+(defn tkt-atom-cleaner-task [reg-atom]
+  ; TODO implement ticker registry here
+  )
 
 
 ;(defn ticket-cleaner-task-old [app-state & {:keys [interval] :or {:interval 60000}}]

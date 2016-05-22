@@ -4,11 +4,13 @@
     [taoensso.timbre :as log])
   (:import
     (com.hazelcast.config Config)
-    (com.hazelcast.core Hazelcast ReplicatedMap EntryListener)
-    (java.util.concurrent TimeUnit)))
+    (com.hazelcast.core Hazelcast ReplicatedMap)
+    (java.util.concurrent TimeUnit)
+    (com.hazelcast.instance GroupProperties)))
 
 ; See hazelcast documentation, pg . 254
-(defn new-hazelcast [{:keys [multicast tcp group-name group-pass]}]
+(defn new-hazelcast [{:keys [instance-name multicast tcp group-name group-pass] :or {instance-name "kanar"} :as conf}]
+  (log/info "Creating new hazelcast configuration: " (dissoc conf :group-pass))
   (let [config (Config.)
         group-config (.getGroupConfig config)
         network-config (.getNetworkConfig config)
@@ -27,48 +29,40 @@
       (.setMulticastGroup multicast-config (:addr multicast "224.2.2.99"))
       (.setMulticastPort multicast-config (:port multicast 54999)))
     (.setConcurrencyLevel tickets-config 64)
+    (.setProperty config GroupProperties/PROP_ENABLE_JMX "true")
+    (.setProperty config GroupProperties/PROP_ENABLE_JMX_DETAILED "true")
+    (.setInstanceName config instance-name)
     (Hazelcast/newHazelcastInstance config)))
 
 
-; TODO tutaj dodać listener do usuwania session ticketów z mapy :sts w master ticketach
-(defn ticket-removal-listener  [tr]
-  (reify
-    EntryListener
+; TODO aktywujemy jeżeli będzie do czegoś potrzebne
+;(defn ticket-removal-listener  [tr]
+;  (reify
+;    EntryListener
+;
+;    (entry-added [_ _] nil)
+;
+;    (entry-updated [_ _] nil)
+;
+;    (entry-removed [_ _] nil)
+;
+;    (entry-evicted [_ e]
+;      (let [{tid :tid, tgt :tgt} (.getValue e)]
+;        (log/debug "Removing ticket: " tid)))
+;
+;    (map-cleared [_ _] nil)
+;
+;    (map-evicted [_ _] nil)
+;    ))
 
-    (entry-added [_ _] nil)
-
-    (entry-updated [_ _] nil)
-
-    (entry-removed [_ _] nil)
-
-    (entry-evicted [_ e]
-      (let [{tid :tid, tgt :tgt} (.getValue e)]
-        (log/debug "Removing ticket: " tid)
-        (when tgt
-          (kt/put-ticket tr (assoc tgt :sts (dissoc (:sts tgt) tid)) kt/TGT-TIMEOUT))))
-
-    (map-cleared [_ _] nil)
-
-    (map-evicted [_ _] nil)
-    ))
-
-
-(defn hazelcast-ticket-registry [^ReplicatedMap tm]
-  (reify
-    kt/ticket-registry
-
-    (get-ticket [_ tid]
-      (when tid (.get tm tid)))
-
-    (put-ticket [_ {tid :tid :as ticket} timeout]
-      (when tid
-        (.put tm tid ticket timeout TimeUnit/MILLISECONDS)
-        ticket))
-
-    (del-ticket [_ {tid :tid :as ticket}]
-      (let [t (or tid ticket)]
-        (when t
-          (.remove tm t))))
+(defn hazelcast-ticket-store [^ReplicatedMap rm]
+  (reify kt/ticket-store
+    (get-obj [_ tid]
+      (when tid (.get rm tid)))
+    (put-obj [_ {:keys [tid timeout] :as tkt}]
+      (when (and tid timeout) (.put rm tid tkt timeout TimeUnit/MILLISECONDS)))
+    (del-obj [_ tid]
+      (when tid (.remove rm tid)))
     ))
 
 

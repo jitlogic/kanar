@@ -91,7 +91,7 @@
 
 ; Core framework plugin functions.
 
-(defn parse-saml2-req [{{:keys [SAMLRequest RelayState]} :params :as req}]
+(defn parse-saml2-req [{{:keys [SAMLRequest RelayState]} :params hp :hidden-params :as req}]
   "Parses SAML2 request. This function can be used with sso-request-parse-wfn."
   (when SAMLRequest
     (try+
@@ -106,9 +106,9 @@
                 :login         (if (.equalsIgnoreCase "true" IsPassive) :none :page)
                 :sesctl        (if (.equalsIgnoreCase "true" ForceAuth) :renew :none)
                 :prompt        (if (= "urn:oasis:names:tc:SAML:2.0:consent:unavailable" Consent) :consent :none)
-                :hidden-params {:SAMLRequest SAMLRequest}}
+                :hidden-params (merge {:SAMLRequest SAMLRequest} hp)}
                (if RelayState {:service-params {:RelayState RelayState}
-                               :hidden-params {:RelayState RelayState :SAMLRequest SAMLRequest}} {})))
+                               :hidden-params  (merge {:RelayState RelayState :SAMLRequest SAMLRequest} hp)} {})))
       (catch Object _
         (log/error "Unparsable SAML request:" SAMLRequest)
         nil))))
@@ -130,18 +130,19 @@
     ))
 
 
-(defmethod kc/service-redirect :saml [{:keys [hidden-params service-url saml-resp-xml]}]
-  (str
-    "<!DOCTYPE html>"
-    (ku/emit-xml
-      [:html [:head]
-       [:body {:onload "javascript:document.samlLoginForm.submit()"}
-        [:div {:style "display: none;"}
-         [:form {:name "samlLoginForm" :action service-url :method "post"}
-          [:textarea {:name "SAMLResponse" }]
-          (for [[k v] hidden-params]
-            [:textarea {:name (name k)} v])
-          [:input {:type "submit" :value "Submit SAML Response"}]]]]])))
+(defmethod kc/service-redirect :saml [{:keys [hidden-params service-url] :as req}]
+  {:req  req
+   :body (str                                                ; TODO rozwarstwić to
+           "<!DOCTYPE html>"
+           (ku/emit-xml
+             [:html [:head]
+              [:body {:onload "javascript:document.samlLoginForm.submit()"}
+               [:div {:style "display: none;"}
+                [:form {:name "samlLoginForm" :action service-url :method "post"}
+                 [:textarea {:name "SAMLResponse"}]
+                 (for [[k v] hidden-params]
+                   [:textarea {:name (name k)} v])
+                 [:input {:type "submit" :value "Submit SAML Response"}]]]]]))})
 
 
 
