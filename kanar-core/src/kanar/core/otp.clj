@@ -54,13 +54,13 @@
          (f req))))))
 
 
-; Zwracane wartości:
-; 0 - poprawny token
-; 1 - niepoprawny token
-; 2 - brak parametrów lub niepoprawne parametry
-; 3 - brak użytkownika w bazie (token niezarejestrowany)
-; 4 - brak uprawnień
-; 5 - konto tymczasowo zablokowane (ale token przeszedł)
+; Returned values
+; 0 - valid token
+; 1 - invalid token
+; 2 - invalid or missing parameters
+; 3 - no such user (token not initialized ?)
+; 4 - insiffucient privileges
+; 5 - temporary lockout
 (defn otp-check-wfn [{:keys [tolerance otp-length otp-check-clients max-attempts]
                       :or {tolerance 90, otp-length 6, max-attempts 3}} user-fn lockouts]
   (let [addrs (set otp-check-clients)]

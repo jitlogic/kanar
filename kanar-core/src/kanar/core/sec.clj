@@ -2,12 +2,10 @@
   "Various security related functions. Validators, filters etc."
   (:require
     [kanar.core.util :as kcu]
-    [kanar.core.util :as ku]
     [slingshot.slingshot :refer [try+ throw+]]
     [ring.util.request :refer [body-string]]
     [clojure.java.io :as io]
-    [taoensso.timbre :as log]
-    [kanar.core :as kc])
+    [taoensso.timbre :as log])
   (:import (javax.xml.validation SchemaFactory Schema Validator)
            (javax.xml XMLConstants)
            (javax.xml.transform.stream StreamSource)
@@ -19,17 +17,18 @@
   "Adds set of standard headers regarding web security."
   (fn [req]
     (let [resp (f req)
-          csp (or content-security-policy "default-src 'self'")]
+          csp (or (:content-security-policy resp) content-security-policy "default-src 'self'")]
       (assoc resp :headers
                   (merge
                     (:headers resp {})
-                    {"X-Frame-Options"             "DENY"
-                     "X-XSS-Protection"            "1; mode=block"
+                    {"X-Frame-Options" "DENY"
+                     "X-XSS-Protection" "1; mode=block"
                      "X-Content-Type-Options"      "nosniff"
                      "Strict-Transport-Security"   "max-age=16070400; includeSubDomains"
                      "X-Content-Security-Policy"   csp
                      "Content-Security-Policy"     csp
-                     "X-Webkit-CSP"                csp}
+                     "X-Webkit-CSP"                csp
+                     }
                     (if (.startsWith (:uri req) "/static")
                       {"Cache-Control" "no-transform,public,max-age=3600,s-maxage=7200"}
                       {"Cache-Control"               "no-cache,no-store,max-age=0,must-revalidate"
@@ -67,13 +66,13 @@
                         :server-name :scheme :request-method])
 
 
-(defn- validate-and-filter-val [v {:keys [re re-grp vfn optional msg] :as vdc}]
+(defn- validate-and-filter-val [v {:keys [re re-grp vfn optional msg iso] :or {:iso true} :as vdc}]
   (let [s (if (map? v) (:value v) v)]
     (cond
       (empty? vdc) v
       (and optional (nil? v)) nil
       (nil? v) (do (log/error "VAL_NIL" vdc) (throw+ {:type :security-error :msg msg}))
-      (some #(Character/isISOControl ^Character %) s) (do (log/error "VAL_ISO"  vdc (kcu/b64 v)) (throw+ {:type :security-error :msg msg}))
+      (and iso (some #(Character/isISOControl ^Character %) s)) (do (log/error "VAL_ISO"  vdc (kcu/b64 v)) (throw+ {:type :security-error :msg msg}))
       re (if-let [rv (re-matches re s)]
            (if re-grp (nth rv re-grp) v)
            (do (log/error "VAL_RE" vdc (kcu/b64 v)) (throw+ {:type :security-error :msg msg})))
@@ -124,7 +123,7 @@
         (catch [:type :security-error] e
           (let [req (if (:body req) (update-in req [:body] body-string) req)]
             (log/error "Error parsing request" (:uri req) ":" e "encoded request:"
-                       (kcu/b64 (kc/sanitize-rec req))))
+                       (kcu/b64 (kcu/sanitize-rec req))))
           (when (:body req)
             (log/error "encoded body: " ))
           (vfn req (or (:msg e) "")))))))
@@ -175,7 +174,9 @@
   {:get {:params {:service svc-url-ovd
                   :TARGET svc-url-ovd
                   :gateway  {:re BOOL_RE :msg "Invalid parameters" :optional true}
-                  :warn     {:re BOOL_RE :msg "Invalid parameters" :optional true}}
+                  :warn     {:re BOOL_RE :msg "Invalid parameters" :optional true}
+                  :SAMLRequest {:re #".*", :msg "Invalid SAML request parameter", :optional true}
+                  :RelayState {:re #"(?s).*", :msg "Invalid SAML relay parameter", :iso false :optional true}}
          :cookies tgc-cookies-ovd
          :headers xff-headers-vd}
    :post {:params {:service  svc-url-ovd
@@ -183,10 +184,19 @@
                    :username {:re #"\s*([A-Za-z0-9\.\-\_]{1,64})\s*" :re-grp 1 :msg "Invalid or missing username"}
                    :password {:re #".{1,64}" :msg "Invalid or missing password"}
                    :gateway  {:re BOOL_RE :msg "Invalid parameters" :optional true}
-                   :warn     {:re BOOL_RE :msg "Invalid parameters" :optional true}}
+                   :warn     {:re BOOL_RE :msg "Invalid parameters" :optional true}
+                   :token    {:re #"[0-9a-fA-F]{6}" :msg "Invalid OTP token." :optional true}
+                   :SAMLRequest {:re #".*", :msg "Invalid SAML request parameter", :optional true}
+                   :RelayState {:re #"(?s).*", :msg "Invalid SAML relay parameter", :iso false :optional true}}
           :cookies tgc-cookies-ovd
           :headers xff-headers-vd}})
 
+(def cas-sulogin-vd
+  (merge-vd
+    cas-login-vd
+    {:post {:params {:runas {:re #"\s*([A-Za-z0-9\.\-\_\@]{1,64})\s*" :re-grp 1 :msg "Niepoprawna nazwa runas."}
+                     :case  {:re #".{1,512}" :msg "Numer sprawy nie może być pusty."}}
+            :headers xff-headers-vd}}))
 
 (def saml2-login-vd
   {:get {:params {:SAMLRequest {:re #".*" :msg "TODO check base64+zip+xml schema here" :optional true}
@@ -259,6 +269,7 @@
 
 (def cas-standard-vdefs
   {"/login" cas-login-vd
+   "/sulogin" cas-sulogin-vd
    "/saml2login" saml2-login-vd
    "/logout" cas-logout-vd
    "/validate" cas10-ticket-vd
@@ -269,17 +280,53 @@
    :default {:get {}, :head {}}})
 
 
+(defn screen [req type msg view-params hidden-params]
+  {:type    :response, :req req
+   :status  200
+   :body    {:type          type,
+             :view-params   (into (:view-params req {}) (for [[k v] view-params :when v] {k v})),
+             :hidden-params (into (:hidden-params req {}) (for [[k v] hidden-params :when v] {k v})),
+             :message       msg}
+   :headers {"Content-type" "text/html; charset=utf-8"}})
+
 (def cas-standard-vfns
-  {:default {:status 200, :body "Invalid request."}})
+  {"/login" (fn [{{:keys [username service TARGET dom]} :params :as req} msg]
+              (screen req :login-screen msg
+                      {:username username}
+                      {:service service :TARGET TARGET :dom (or dom "ext")}))
+   "/sulogin" (fn [{{:keys [username runas service case TARGET dom]} :params :as req} msg]
+                (screen req :login-screen msg
+                        {:username username :runas runas :case case}
+                        {:service service :TARGET TARGET :dom (or dom "ext")}))
+   :default {:status 200, :body "Invalid request."}})
 
 
-(defn wrap-check-referer [f re]
-  "Zabezpieczenie przed niektórymi klasami XSS poprzez wymuszenie właściwego nagłówka Referer."
-  (fn [{headers :headers method :request-method :as req}]
-    (let [referer (get headers "Referer")]
-      (if (and (= method :post) referer (not (re-matches re referer)))
-        (do
-          (log/warn "Invalid referer:" referer)
-          {:status 200, :body "Security alert: invalid referer."})
-        (f req)))))
+(defn wrap-check-referer
+  "XSS protection. Force existence of referer field."
+  ([re]
+   (wrap-check-referer identity re))
+  ([f re]
+   (fn [{headers :headers method :request-method :as req}]
+     (let [referer (get headers "Referer")]
+       (if (and (= method :post) referer (not (re-matches re referer)))
+         (do
+           (log/warn "Invalid referer:" referer)
+           {:status 200, :body "Security alert: invalid referer."})
+         (f req))))))
+
+
+(defn intranet-flag-wfn
+  "Detects if client is trying to connect from intranet and acts accordingly."
+  ([proxies direct?]
+   (intranet-flag-wfn identity proxies direct?))
+  ([f proxies direct?]
+   (fn [{:keys [headers remote-addr] :as req}]
+     (let [intranet
+           (if-let [xff (get headers "x-forwarded-for")]
+             (let [xff (if (string? xff) xff (clojure.string/join xff ","))
+                   xff (conj (set (clojure.string/split xff #",")) remote-addr)
+                   pxi (clojure.set/intersection proxies xff)]
+               (not (empty? pxi)))
+             direct?)]
+       (f (assoc-in req [:params :intranet] intranet))))))
 

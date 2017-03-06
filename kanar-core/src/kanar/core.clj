@@ -9,11 +9,14 @@
     [slingshot.slingshot :refer [try+ throw+]]
     [clj-http.client :as http]
     [schema.core :as s]
-    [clojure.string :as cs])
+    [clojure.string :as cs]
+    [clojure.java.shell :refer [sh]]
+    [kanar.core.util :as kcu])
   (:import (java.util.concurrent ExecutorService Executors)
            (java.text SimpleDateFormat)
            (java.util Date)
-           (clojure.lang IAtom)))
+           (clojure.lang IAtom)
+           (java.io File)))
 
 (def http-request-schema
   "Schema for base (filtered) HTTP request."
@@ -166,24 +169,12 @@
         s))))
 
 
-(def SANITIZE_KEYWORDS #{:password :newPassword :currentPassword :repeatPassword :token})
-
-
-(defn sanitize-rec [r]
-  (cond
-    (instance? IAtom r) nil
-    (vector? r) (vec (for [v r] (sanitize-rec v)))
-    (list? r) (for [v r] (sanitize-rec v))
-    (map? r) (into {} (for [[k v] r] {k (if (contains? SANITIZE_KEYWORDS k) "..." (sanitize-rec v))}))
-    :else r))
-
-
 (defn audit [r origin action status & {:as opts}]
   (let [audit-log (or (-> r :audit-log) (-> r :req :audit-log))]
     (if audit-log
       (swap! audit-log conj (merge {} opts {:action action, :origin origin, :req (:req r r),
                                             :when (ku/cur-time), :status status}))
-      (log/error "No :audit-log attribute found in request-reply structure: " (sanitize-rec r))))
+      (log/error "No :audit-log attribute found in request-reply structure: " (kcu/sanitize-rec r))))
   r)
 
 
@@ -214,6 +205,11 @@
    :user_login  [#(or (get-in % [:credentials :username]) (get-in % [:params :username]))]
    :spnego      [#(if (:spnego-authenticated %) 1 0)]
    :otp         [#(if (:otp-authenticated %) 1 0)]
+   :intranet    [#(if (get-in % [:params :intranet]) 1 0)]
+   :suadmin     [#(if (= "/sulogin" (:uri %)) (get-in % [:principal :su :id]))]
+   :runas       [#(get-in % [:params :runas])]
+   :sucase      [#(get-in % [:params :case])]
+   :sulogin     [#(if (= "/sulogin" (:uri %)) 1 0)]
    ; TODO ? user agent ?
    ; TODO :login, :prompt, :sesctl
    })
@@ -414,6 +410,14 @@
                (audit :service-lookup-wfn :SVT-GRANT :FAILED)))
          (message-screen req :ok "Login successful."))))))
 
+(defn role-based-service-auth
+  ""
+  [{{:keys [allow-roles deny-roles]} :service {{roles :roles} :attributes} :principal}]
+  (let [sdr (set deny-roles), sar (set allow-roles), sr (set roles)]
+    (cond
+      (not (empty? (clojure.set/intersection sdr sr))) false
+      (not (empty? sar)) (not (empty? (clojure.set/intersection sar sr)))
+      :else true)))
 
 (defmulti service-redirect "Renders redirect response from SSO to given service." :protocol)
 
@@ -433,9 +437,16 @@
    :body   (str "Error occured: " error ": " error_description)})
 
 
+(defn wrap-render-view [f render-view-fn]
+  "Renders HTML view based on give render view funcion."
+  (fn [req]
+    (let [res (f req)]
+      (if (map? (:body res))
+        (assoc res :body (render-view-fn res))
+        res))))
+
+
 (def ^:private ^ExecutorService logout-pool (Executors/newFixedThreadPool 16))
-
-
 
 (defn service-logout [url {:keys [service tid]}]
   "Single Sign-Out.
@@ -505,10 +516,10 @@
        (log/info "Enabling trace log filtering: " filter)
        (let [cond-fn (eval `(fn [~'r] ~filter))]
          (fn [{:keys [trace-log] :as req}]
-           (let [rslt (f req), r (ku/combine-maps (sanitize-rec req) (sanitize-rec (:req rslt)))]
+           (let [rslt (f req), r (ku/combine-maps (kcu/sanitize-rec req) (kcu/sanitize-rec (:req rslt)))]
              (try
                (when (cond-fn r)
-                 (let [trace (for [r @trace-log] (-> r sanitize-rec format-trace-rec))
+                 (let [trace (for [r @trace-log] (-> r kcu/sanitize-rec format-trace-rec))
                        trace (when (instance? IAtom trace-log) (cs/join "\n" trace))
                        tst (.format (SimpleDateFormat. "yyyy-MM-dd HH:mm:ss.SSS ") (Date. (System/currentTimeMillis)))]
                    (locking path (spit path (str tst " REQUEST: " (:uri r) "  " r "\n" trace "\n\n") :append true))))
@@ -518,8 +529,6 @@
        (catch Throwable e
          (log/error "Error configuring request trace. Tracing will be disabled. " (ku/error-with-trace e)) f))
      f)))
-
-; TODO macro (traced--> log-level x & forms)
 
 
 (defn traced-fn [tags expr]
@@ -533,4 +542,68 @@
 (defmacro traced--> [tags & fns]
   (let [body (mapcat (partial traced-fn tags) (reverse fns))]
     `(-> ~@body)))
+
+
+(def trace-dump-counter (atom 0))
+
+
+(defn trace-dump [path {:keys [trace-log]} e t]
+  "Dumps trace."
+  (swap! trace-dump-counter inc)
+  (try+
+    (let [dt (.format (SimpleDateFormat. "yyyyMMdd_HHmmss.SSS") (Date.))
+          fname (File. ^String path (str "dump-" dt "." t ".log"))
+          trace (for [r @trace-log] (-> r kcu/sanitize-rec format-trace-rec))
+          trace (when (instance? IAtom trace-log) (cs/join "\n" trace))]
+      (spit fname (str e "\n\n" (ku/error-with-trace e) "\n\n\nFull trace:\n\n" trace))
+      (sh "gzip" "-6" (.getPath fname))
+      (log/error "Fatal error" t ":" e " (full log: " fname ")."))
+    (catch Object e
+      (log/error "Error dumping trace " t ": " e "\n" (ku/error-with-trace e)))))
+
+
+(defn wrap-error-screen
+  ([render-fn path]
+   (wrap-error-screen identity render-fn path))
+  ([f render-fn path]
+   (fn [req]
+     (try+
+       (f req)
+       (catch Object e
+         (let [t (ku/random-string 8 "0123456789ABCDEF")]
+           (if path
+             (trace-dump path req e t)
+             (log/error "Fatal error" t ":" e "\n" (ku/error-with-trace e)))
+           {:status  200
+            :headers {"Content-Type" "text/html; charset=utf-8"}
+            :body    (render-fn t)})
+         )))))
+
+
+(defn su-auth-wfn
+  "Performs impersonification when user has specific su-admin role."
+  ([su-role]
+   (su-auth-wfn identity su-role))
+  ([f su-role]
+   (fn [{{{roles :roles} :attributes :as princ} :principal {runas :runas case :case} :params :as req}]
+     (log/debug "su: roles=" roles "su-role=" su-role)
+     (if (contains? (set roles) su-role)
+       (let [attrs {:impersonificated true :adminRoles roles :caseNum case :adminLogin (:id princ)}
+             princ {:id runas :su princ :attributes attrs}, rslt (f (assoc req :principal princ))]
+         (if (= "Login failed." (-> rslt :body :message))
+           (login-failed (dissoc (:req rslt) :principal) "No such user.")
+           rslt))
+       (login-failed req "This user has no SU privileges.")))))
+
+
+(defn su-deny-wfn
+  "Blocks impersonification for specific target accounts."
+  ([su-role]
+   (su-deny-wfn identity su-role))
+  ([f su-role]
+   (fn [{{{roles :roles} :attributes} :principal :as req}]
+     (if (contains? (set roles) su-role)
+       (login-failed req "Cannot SU onto this user.")
+       (f req)))))
+
 

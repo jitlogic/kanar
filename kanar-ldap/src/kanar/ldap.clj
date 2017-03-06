@@ -16,7 +16,7 @@
   [[#"NDS error.*197.*"                          {:type :login-failed :msg "Account locked."}]
    [#"NDS error.*215.*"                          {:type :chpass-failed :msg "Password previously used."}]
    [#"NDS error.*220.*",                         {:type :login-failed :msg "Account expired."}]
-   [#"NDS error: bad password ..222.",           {:type :login-failed, :msg "Login failed."}]
+   [#"NDS error: bad password ..222.",           {:type :login-failed :msg "Login failed."}]
    [#"NDS error.*222.*"                          {:type :login-failed :msg "Password expired."}]
    [#"NDS error: failed authentication ..669."   {:type :login-failed :msg "Login failed."}]
    [#"NDS error.*669.*"                          {:type :chpass-failed :msg "Wrong password."}]
@@ -130,6 +130,14 @@
         (if error (kc/login-failed req error) (f req))))))
 
 
+(defn ldap-otp-lookup-fn [conn err-defs ldap-conf login-attr key-attr pin-attr]
+  (fn [username]
+    (let [{:keys [dn error]} (ldap-lookup-dn conn err-defs ldap-conf username)]
+      (if-not error
+        (when-let [rec (ldap/get conn dn [login-attr key-attr pin-attr])]
+          {:login (login-attr rec), :initial_key (key-attr rec), :pin (pin-attr rec)})))))
+
+
 (defn precompile-attr-map [attr-map]
   (into
     {}
@@ -194,6 +202,26 @@
           (f (assoc-in req [:principal :attributes to-attr]
                        (filterv not-empty (for [g attrs] (second (re-find regex g))))))
           (kc/login-failed req "Cannot obtain user roles."))))))
+
+
+
+(defn- expand-roles-recursive [conn g-attr in-grps rslt-grps]
+  in-grps)
+
+
+
+(defn ldap-recursive-roles-wfn
+  ([conn u-attr g-attr to-attr regex]
+    (ldap-recursive-roles-wfn identity conn u-attr g-attr to-attr regex))
+  ([f conn u-attr g-attr to-attr regex]
+    (fn [{{:keys [dn]} :principal :as req}]
+       (let [entry (ldap/get conn dn [u-attr])
+             attrs (if (string? (u-attr entry)) [(u-attr entry)] (u-attr entry))
+             attrs (into [] (expand-roles-recursive conn g-attr (set attrs) #{}))]
+         (if entry
+           (f (assoc-in req [:principal :attributes to-attr]
+                        (filterv not-empty (for [g attrs] (second (re-find regex g))))))
+           (kc/login-failed req "Cannot obtain user roles."))))))
 
 
 ; TODO recursive LDAP group resolver

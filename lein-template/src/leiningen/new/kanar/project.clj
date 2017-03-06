@@ -4,19 +4,18 @@
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :dependencies 
-  [[org.clojure/clojure "1.6.0"]
+  [[org.clojure/clojure "1.8.0"]
    [org.clojure/tools.nrepl "0.2.10"]
-   [kanar/kanar-core "0.1.1"]
-   {{#with-ldap}} [kanar/kanar-ldap "0.1.1"] {{/with-ldap}}
-   {{#with-hazelcast}} [kanar/kanar-hazelcast "0.1.1"] {{/with-hazelcast}}
+   [kanar/kanar-core "0.2"]
+   [kanar/kanar-ldap "0.2"]
+   [kanar/kanar-hazelcast "0.2"]
    [ring/ring-core "1.3.2"]
    [ring/ring-devel "1.3.2"]
    [compojure "1.3.3"]
    [hiccup "1.0.5"]
    [http-kit "2.1.18"]
    [ring/ring-jetty-adapter "1.3.2"]
-   [com.taoensso/timbre "4.0.2"]
-   ]
+   [com.taoensso/timbre "4.0.2"]]
 
   :plugins [[lein-environ "1.0.0"]]
 

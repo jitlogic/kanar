@@ -8,7 +8,7 @@
     (java.security.interfaces RSAPrivateKey RSAPublicKey ECPrivateKey ECPublicKey)
     (javax.crypto SecretKey KeyGenerator)
     (com.nimbusds.jwt SignedJWT)
-    (java.util Collections)
+    (java.util Collections ArrayList)
     (org.w3c.dom Document)
     (java.security KeyStore MessageDigest)
     (java.io FileInputStream)
@@ -17,7 +17,8 @@
     (javax.xml.crypto.dsig.spec TransformParameterSpec C14NMethodParameterSpec)
     (javax.xml.crypto.dsig.dom DOMSignContext DOMValidateContext)
     (javax.xml.crypto KeySelector)
-    (javax.crypto.spec SecretKeySpec))
+    (javax.crypto.spec SecretKeySpec)
+    (java.security.cert X509Certificate))
   (:require
     [kanar.core.util :as kcu]
     [slingshot.slingshot :refer [try+ throw+]]
@@ -98,29 +99,35 @@
     (with-open [f (FileInputStream. ^String keystore)]
       (let [ks (KeyStore/getInstance (KeyStore/getDefaultType))]
         (.load ks f (.toCharArray keypass))
-        {:prv-key (.getKey ks alias (.toCharArray keypass))
-         :pub-key (.getPublicKey (.getCertificate ks alias))}))
+        {:prv-key  (.getKey ks alias (.toCharArray keypass))
+         :pub-cert (.getCertificate ks alias)
+         :pub-key  (.getPublicKey (.getCertificate ks alias))}))
     :else nil))
 
 
 ; TODO parametrize transform and signature parameters
-(defn xml-sign [^Document doc kp]
-  (let [sc (DOMSignContext. ^RSAPrivateKey (:prv-key kp) (.getDocumentElement doc))
-        xf (XMLSignatureFactory/getInstance "DOM")
-        dm (.newDigestMethod xf DigestMethod/SHA1 nil)
-        ^TransformParameterSpec tp nil
-        tr (.newTransform xf Transform/ENVELOPED tp)
-        rf (.newReference xf "" dm (Collections/singletonList tr) nil nil)
-        ^C14NMethodParameterSpec mp nil
-        cm (.newCanonicalizationMethod xf CanonicalizationMethod/INCLUSIVE mp)
-        sm (.newSignatureMethod xf SignatureMethod/RSA_SHA1 nil)
-        si (.newSignedInfo xf cm sm (Collections/singletonList rf))
-        kf (.getKeyInfoFactory xf)
-        kv (.newKeyValue kf (:pub-key kp))
-        ki (.newKeyInfo kf (Collections/singletonList kv))
-        xs (.newXMLSignature xf si ki)]
-    (.sign xs sc)
-    doc))
+(defn xml-sign [^Document doc kp enabled]
+  (when enabled
+    (let [sc (DOMSignContext. ^RSAPrivateKey (:prv-key kp) (.getDocumentElement doc))
+          xf (XMLSignatureFactory/getInstance "DOM")
+          dm (.newDigestMethod xf "http://www.w3.org/2000/09/xmldsig#sha1" nil)
+          ^TransformParameterSpec tp nil
+          tr (.newTransform xf "http://www.w3.org/2000/09/xmldsig#enveloped-signature" tp)
+          tr2 (.newTransform xf "http://www.w3.org/2001/10/xml-exc-c14n#" tp)
+          rf (.newReference xf "" dm (ArrayList. [tr tr2]) nil nil)
+          ^C14NMethodParameterSpec mp nil
+          cm (.newCanonicalizationMethod xf "http://www.w3.org/2001/10/xml-exc-c14n#" mp)
+          sm (.newSignatureMethod xf "http://www.w3.org/2000/09/xmldsig#rsa-sha1" nil)
+          si (.newSignedInfo xf cm sm (Collections/singletonList rf))
+          kf (.getKeyInfoFactory xf)
+          ^X509Certificate cr (:pub-cert kp)
+          xd (.newX509Data kf (ArrayList. [(.getName (.getSubjectX500Principal cr)) cr]))
+          ki (.newKeyInfo kf (ArrayList. [xd]))
+          xs (.newXMLSignature xf si ki)]
+      (.setDefaultNamespacePrefix sc "ds")
+      (.sign xs sc)
+      doc))
+  doc)
 
 
 (defn xml-validate [^Document doc, kp]
@@ -242,4 +249,65 @@
     (.decrypt jwe-obj (DirectDecrypter. ^SecretKey (:prv-key (read-keys enc-key))))
     (-> jwe-obj .getPayload .toString read-string)))
 
+
+
+(defn gen-raw-key [^String alg ^Integer len]
+  (->
+    (doto (KeyGenerator/getInstance alg) (.init len))
+    .generateKey .getEncoded))
+
+
+; Initial master key
+(def KMI {:enc-alg  :DIR, :enc-method :A128GCM
+          :enc-key {:secret "quiA0EwScA/jeoYzLUn8Eg=="}})
+
+(defonce KMK nil)
+
+(defn gen-kmk []
+  (jwe-encrypt KMI {:enc-alg :DIR, :enc-method :A128GCM,
+                    :enc-key {:secret (DatatypeConverter/printBase64Binary (gen-raw-key "AES" 128))}}))
+
+
+(defn prompt-kmk []
+  (println "Master key not found in environment variables. You have to paste KMK here.")
+  (print "Enter master key: ")
+  (String. (.readPassword (System/console) "Enter master key: " (object-array 0))))
+
+
+(defn get-kmk []
+  (when (nil? KMK)
+    (let [enc-kmk (or (System/getenv "KMK") (System/getProperty "kanar.kmk") (prompt-kmk))]
+      (alter-var-root #'KMK (constantly (jwe-decrypt KMI enc-kmk)))))
+  KMK)
+
+
+(defn encrypt-password [^String pwd]
+  (jwe-encrypt (get-kmk) pwd))
+
+
+(defn decrypt-password [^String enc-pwd]
+  (jwe-decrypt (get-kmk) enc-pwd))
+
+
+(defn process-password [^String pwd]
+  (cond
+    (nil? pwd) nil
+    (.startsWith pwd "ENC:") (decrypt-password (.substring pwd 4))
+    (.startsWith pwd "ENV:") (System/getenv (.substring pwd 4))
+    :else pwd))
+
+
+(defn unprocess-password [pwd]
+  (when pwd (str "ENC:" (encrypt-password pwd))))
+
+
+
+(defn translate-config-passwords [config paths translate-password]
+  (loop [[[ks pwd] & pwds] (for [cp paths] [cp (translate-password (get-in config cp))]),
+         conf (assoc-in config [:radius :hosts]
+                        (into {} (for [[k v] (-> config :radius :hosts)] {k (translate-password v)})))]
+    (cond
+      (nil? ks) conf
+      (nil? pwd) (recur pwds conf)
+      :else (recur pwds (assoc-in conf ks pwd)))))
 

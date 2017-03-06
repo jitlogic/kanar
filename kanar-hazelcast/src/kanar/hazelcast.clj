@@ -4,7 +4,7 @@
     [taoensso.timbre :as log])
   (:import
     (com.hazelcast.config Config)
-    (com.hazelcast.core Hazelcast ReplicatedMap)
+    (com.hazelcast.core Hazelcast ReplicatedMap HazelcastInstance)
     (java.util.concurrent TimeUnit)
     (com.hazelcast.instance GroupProperties)))
 
@@ -33,6 +33,28 @@
     (.setProperty config GroupProperties/PROP_ENABLE_JMX_DETAILED "true")
     (.setInstanceName config instance-name)
     (Hazelcast/newHazelcastInstance config)))
+
+
+(defn hz-reconnect [{{old-conf :hazelcast-conf} :conf, old-conn :hazelcast} {new-conf :hazelcast-conf}]
+  "Connects (or reconnects) to hazelcast cluster."
+  (if (or (not= old-conf new-conf) (nil? old-conn))
+    (try
+      (log/info "Hazelcast configuration changed. Restarting hazelcast.")
+      (let [new-conn (new-hazelcast new-conf)]
+        (log/info "Hazelcast instance created.")
+        (when old-conn
+          (log/info "Old hazelcast instance closing delayed.")
+          (future
+            (Thread/sleep 30000)
+            (.shutdown ^HazelcastInstance old-conn)
+            (log/info "Old hazelcast instance closed.")))
+        new-conn)
+      (catch Exception e
+        (log/error "Error reconfiguring hazelcast instance. Leaving old instance (if any) intact." e)
+        old-conn))
+    (do
+      (log/info "Hazelcast configuration not changed. Leaving old instance intact.")
+      old-conn)))
 
 
 ; TODO aktywujemy jeżeli będzie do czegoś potrzebne

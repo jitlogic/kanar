@@ -1,4 +1,4 @@
-(defproject kanar/kanar-ldap "0.1.1"
+(defproject kanar/kanar-ldap "0.2"
   :description "LDAP support for Kanar"
   :url "http://kanar.io/devel/ldap.html"
   :license {:name "Eclipse Public License"

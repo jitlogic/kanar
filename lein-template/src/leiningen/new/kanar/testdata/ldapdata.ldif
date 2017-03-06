@@ -1,0 +1,55 @@
+dn: dc=com
+objectClass: top
+objectClass: domain
+dc: com
+
+
+dn: dc=mycompany,dc=com
+objectClass: top
+objectClass: domain
+dc: mycompany
+
+
+dn: ou=users,dc=mycompany,dc=com
+objectClass: top
+objectClass: organizationalUnit
+ou: users
+
+
+dn: cn=bromba,ou=users,dc=mycompany,dc=com
+objectClass: top
+objectClass: person
+givenName: Bromba
+sn: Brombowicz
+userPassword: 1qaz2wsx
+memberOf: cn=USERS,ou=groups,dc=mycompany,dc=com
+mozillaCustom1: 7586
+mozillaCustom2: 2486617d7c2260ac
+cn: bromba
+
+
+dn: cn=gopher,ou=users,dc=mycompany,dc=com
+objectClass: top
+objectClass: person
+givenName: Gopher
+sn: Zawijacz
+userPassword: 1qaz2wsx
+memberOf: cn=USERS,ou=groups,dc=mycompany,dc=com
+memberOf: cn=BEAN_COUNTERS,ou=groups,dc=mycompany,dc=com
+mozillaCustom1: 7586
+mozillaCustom2: 2486617d7c2260ad
+cn: gopher
+
+
+dn: cn=suadmin,ou=users,dc=mycompany,dc=com
+objectClass: top
+objectClass: person
+givenName: Super
+sn: Admin
+userPassword: 1qaz2wsx
+memberOf: cn=su-admins,ou=groups,dc=mycompany,dc=com
+memberOf: cn=su-deny,ou=groups,dc=mycompany,dc=com
+memberOf: cn=USERS,ou=groups,dc=mycompany,dc=com
+cn: suadmin
+
+

@@ -1,4 +1,4 @@
-(defproject kanar/kanar-core "0.1.1"
+(defproject kanar/kanar-core "0.2"
   :description "Kanar core framework"
   :url "http://kanar.io/devel/core.html"
   :license {:name "Eclipse Public License"

@@ -53,7 +53,7 @@
 ; Old stuff, to be removed soon
 
 
-(defn logout-handler [ticket-registry]
+(defn cas-logout-handler-wfn [ticket-registry]
   (fn [{{service :service} :params, {{CASTGC :value} "CASTGC"} :cookies :as req}]
     (let [tgt (kt/get-ticket ticket-registry CASTGC)
           req (assoc req :tgt tgt :principal (:princ tgt))]
@@ -75,7 +75,7 @@
         (kc/message-screen req :ok "User logged out.")))))
 
 
-(defn cas10-validate-handler [ticket-registry]
+(defn cas10-validate-handler-wfn [ticket-registry]
   (fn [{{svc-url :service sid :ticket} :params :as req}]
     (let [{:keys [ctime timeout tgt service] :as svt} (kt/get-ticket ticket-registry sid)
           {:keys [princ] :as tgt} (if tgt (kt/get-ticket ticket-registry tgt))
@@ -236,7 +236,7 @@
   (cas20 [:cas:proxyFailure {:code code} msg]))
 
 ; TODO przejść na 'renderowany' chain podobny do login chainu
-(defn cas20-validate-handler [ticket-registry re-tid]
+(defn cas20-validate-handler-wfn [ticket-registry re-tid]
   (fn [{{svc-url :service sid :ticket pgt-url :pgtUrl} :params :as req}]
     (let [{:keys [ctime timeout tgt service] :as svt} (kt/get-ticket ticket-registry sid)
           {:keys [princ] :as tgt} (if tgt (kt/get-ticket ticket-registry tgt))
@@ -338,7 +338,7 @@
           )))))
 
 
-(defn saml-validate-handler [ticket-registry]
+(defn saml-validate-handler-wfn [ticket-registry]
   (fn [{{svc-url :TARGET SAMLart :SAMLart} :params :as req}]
     (let [saml (body-string req)
           sid (or SAMLart (saml-parse-lookup-tid saml))

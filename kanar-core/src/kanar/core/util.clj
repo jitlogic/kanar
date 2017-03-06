@@ -10,7 +10,8 @@
            (org.w3c.dom Document)
            (java.io StringWriter PrintWriter)
            (net.minidev.json JSONObject JSONArray)
-           (java.util.concurrent ExecutorService))
+           (java.util.concurrent ExecutorService)
+           (clojure.lang IAtom))
   (:require
     [slingshot.slingshot :refer [try+ throw+]]
     [taoensso.timbre :as log]
@@ -173,3 +174,17 @@
     (if (every? map? vals)
       (apply merge-with combine-maps vals)
       (last vals))))
+
+(def SANITIZE_KEYWORDS #{:password :newPassword :currentPassword :repeatPassword :token})
+
+(defn sanitize-rec [r]
+  (cond
+    (instance? IAtom r) nil
+    (vector? r) (vec (for [v r] (sanitize-rec v)))
+    (list? r) (for [v r] (sanitize-rec v))
+    (map? r) (into {} (for [[k v] r] {k (if (contains? SANITIZE_KEYWORDS k) "..." (sanitize-rec v))}))
+    :else r))
+
+(defn to-path [home-dir path]
+  (if (.startsWith path "/") path (str home-dir "/" path)))
+

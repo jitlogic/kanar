@@ -1,4 +1,4 @@
-(defproject kanar/lein-template "0.1.1"
+(defproject kanar/lein-template "0.2"
   :description "Kanar application template."
   :url "http://kanar.io"
   :license {:name "Eclipse Public License"

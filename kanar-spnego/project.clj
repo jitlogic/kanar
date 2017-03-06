@@ -1,4 +1,4 @@
-(defproject kanar/kanar-spnego "0.1.1"
+(defproject kanar/kanar-spnego "0.2"
   :description "SPNEGO support for Kanar"
   :url "http://kanar.io/devel/spnego.html"
   :license {:name "Eclipse Public License"
